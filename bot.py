@@ -228,5 +228,23 @@ async def verify_embed(ctx):
     await send_verification_embed(channel)
     await ctx.send(f"✅ Verification embed sent to {channel.mention}")
 
+@bot.command(name="userinfo")
+@commands.has_permissions(administrator=True)
+async def userinfo(ctx, member: discord.Member):
+    # ดึงข้อความล่าสุดในห้อง APPROVAL_CHANNEL_ID ที่เกี่ยวกับ user นี้
+    channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
+    if not channel:
+        await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
+        return
+
+    async for message in channel.history(limit=200):
+        if message.author == bot.user and message.embeds and message.mentions:
+            if member in message.mentions:
+                embed = message.embeds[0]
+                await ctx.send(embed=embed)
+                return
+
+    await ctx.send("❌ No verification info found for this user.")
+
 # ====== Run bot ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))

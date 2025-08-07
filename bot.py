@@ -112,8 +112,8 @@ class ApproveRejectView(discord.ui.View):
         member = interaction.guild.get_member(self.user.id)
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
 
-        male = {"male", "man", "boy", "ชาย", "เพศชาย", "ผู้ชาย"}
-        female = {"female", "woman", "girl", "หญิง", "เพศหญิง", "ผู้หญิง"}
+        male = {"male", "man", "m", "boy", "ชาย", "เพศชาย", "ผู้ชาย", "ช"}
+        female = {"female", "f", "woman", "girl", "หญิง", "เพศหญิง", "ผู้หญิง", "ญ"}
 
         gender_role_id = ROLE_LGBT
         if self.gender_text in male:

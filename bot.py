@@ -1,4 +1,5 @@
 import os
+import re
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
@@ -7,17 +8,16 @@ from datetime import datetime, timezone, timedelta
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
 
-ROLE_ID_TO_GIVE = 1321268883088211981
+ROLE_ID_TO_GIVE = 1321268883088211981  # Role หลัก
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
+ROLE_0_10 = 1402907371696558131
 ROLE_10_15 = 1344232758129594379
 ROLE_16_20 = 1344232891093090377
 ROLE_21_28 = 1344232979647565924
 ROLE_29_35 = 1344233048593403955
 ROLE_36_UP = 1344233119229939763
-
-pending_verifications = set()
 
 # ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
@@ -26,6 +26,7 @@ intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+pending_verifications = set()
 
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
@@ -42,50 +43,46 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        try:
-            age = int(self.age.value.strip())
-        except ValueError:
+        age_str = self.age.value.strip()
+        if not re.fullmatch(r"\d{1,3}", age_str):
             await interaction.response.send_message(
-                "❌ Please enter a valid number for age, such as 18 or 25.\n"
-                "❌ กรุณากรอกอายุเป็นตัวเลข เช่น 18 หรือ 25",
+                "❌ Please enter a valid number for age (1–3 digits, no symbols or letters).\n"
+                "❌ กรุณากรอกอายุเป็นตัวเลขล้วน ไม่เกิน 3 หลัก และห้ามมีสัญลักษณ์หรือตัวอักษรใดๆ เช่น + / a ข",
                 ephemeral=True
             )
             return
 
         if any(char.isdigit() for char in self.name.value):
             await interaction.response.send_message(
-                "❌ Name should not contain numbers.\n"
-                "❌ ชื่อห้ามมีตัวเลข",
+                "❌ Name should not contain numbers.\n❌ ชื่อห้ามมีตัวเลข",
                 ephemeral=True
             )
             return
 
         if any(char.isdigit() for char in self.gender.value):
             await interaction.response.send_message(
-                "❌ Gender should not contain numbers.\n"
-                "❌ เพศห้ามมีตัวเลข",
+                "❌ Gender should not contain numbers.\n❌ เพศห้ามมีตัวเลข",
                 ephemeral=True
             )
             return
 
         pending_verifications.add(interaction.user.id)
 
-        now = datetime.now(timezone(timedelta(hours=7)))
-        formatted_time = now.strftime("%d/%m/%Y %H:%M")
-
-        embed = discord.Embed(title="Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
+        embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         embed.add_field(name="Name / ชื่อ", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
-        embed.add_field(name="📅 Sent at / เวลาที่ส่ง", value=formatted_time, inline=False)
-        embed.set_footer(text=f"From: {interaction.user} | ID: {interaction.user.id}")
+
+        now = datetime.now(timezone(timedelta(hours=7)))
+        formatted_time = now.strftime("%d/%m/%Y %H:%M")
+        embed.add_field(name="📅 Sent at", value=f"{formatted_time}", inline=False)
+        embed.set_footer(text=f"User ID: {interaction.user.id}")
 
         channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
         if channel:
             view = ApproveRejectView(user=interaction.user, gender_text=self.gender.value, age_text=self.age.value)
-            await channel.send(content=f"{interaction.user.mention} submitted a verification request.",
-                               embed=embed, view=view)
+            await channel.send(content=interaction.user.mention, embed=embed, view=view)
 
         await interaction.response.send_message(
             "✅ Your verification request has been submitted. Please wait for admin approval.\n"
@@ -127,11 +124,13 @@ class ApproveRejectView(discord.ui.View):
         gender_role = interaction.guild.get_role(gender_role_id)
 
         try:
-            age = int("".join(filter(str.isdigit, self.age_text)))
+            age = int(self.age_text)
         except ValueError:
             age = -1
 
-        if 10 <= age <= 15:
+        if 0 <= age <= 10:
+            age_role_id = ROLE_0_10
+        elif 10 < age <= 15:
             age_role_id = ROLE_10_15
         elif 16 <= age <= 20:
             age_role_id = ROLE_16_20
@@ -152,6 +151,8 @@ class ApproveRejectView(discord.ui.View):
             if age_role:
                 await member.add_roles(age_role, reason="Age")
 
+            pending_verifications.discard(self.user.id)
+
             try:
                 await self.user.send(
                     f"✅ Your verification has been approved!\n"
@@ -160,7 +161,6 @@ class ApproveRejectView(discord.ui.View):
             except:
                 pass
 
-            pending_verifications.discard(self.user.id)
             await interaction.response.send_message("✅ Approved and roles assigned.", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
@@ -173,6 +173,7 @@ class ApproveRejectView(discord.ui.View):
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pending_verifications.discard(self.user.id)
         try:
             await self.user.send(
                 "❌ Your verification was rejected. Please contact admin.\n"
@@ -181,7 +182,6 @@ class ApproveRejectView(discord.ui.View):
         except:
             pass
 
-        pending_verifications.discard(self.user.id)
         await interaction.response.send_message("❌ Rejected.", ephemeral=True)
 
         for child in self.children:
@@ -190,7 +190,7 @@ class ApproveRejectView(discord.ui.View):
                 child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
         await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
-# ====== Embed Sender (for admin only) ======
+# ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):
     embed = discord.Embed(
         title="📌 Welcome / ยินดีต้อนรับ",

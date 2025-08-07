@@ -1,12 +1,13 @@
 import os
 import discord
 from discord.ext import commands
+from datetime import datetime, timezone, timedelta
 
 # ====== CONFIGURATION ======
-VERIFY_CHANNEL_ID = 1402889712888447037  # ห้องที่ใช้โพสต์ Embed ปุ่มยืนยัน
-APPROVAL_CHANNEL_ID = 1402889786712395859  # ห้องรอแอดมินอนุมัติ
+VERIFY_CHANNEL_ID = 1402889712888447037
+APPROVAL_CHANNEL_ID = 1402889786712395859
 
-ROLE_ID_TO_GIVE = 1321268883088211981  # Role หลัก
+ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
@@ -16,7 +17,6 @@ ROLE_21_28 = 1344232979647565924
 ROLE_29_35 = 1344233048593403955
 ROLE_36_UP = 1344233119229939763
 
-# ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -24,7 +24,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ====== Modal ======
+# ===== Modal =====
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(label="Name / ชื่อ", required=True)
     age = discord.ui.TextInput(label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)", required=True)
@@ -41,17 +41,23 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        embed = discord.Embed(title="Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
+        now = datetime.now(timezone(timedelta(hours=7)))
+        formatted_time = now.strftime("📅 Sent at: %d/%m/%Y %H:%M")
+
+        embed = discord.Embed(
+            title="📥 Verification Request / คำขอยืนยันตัวตน",
+            color=discord.Color.orange()
+        )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         embed.add_field(name="Name / ชื่อ", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
-        embed.set_footer(text=f"From: {interaction.user} | ID: {interaction.user.id}")
+        embed.set_footer(text=formatted_time)
 
         channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
         if channel:
             view = ApproveRejectView(user=interaction.user, gender_text=self.gender.value, age_text=self.age.value)
-            await channel.send(embed=embed, view=view)
+            await channel.send(content=interaction.user.mention, embed=embed, view=view)
 
         await interaction.response.send_message(
             "✅ Your verification request has been submitted. Please wait for admin approval.\n"
@@ -59,7 +65,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             ephemeral=True
         )
 
-# ====== View: Button to open Modal ======
+# ===== View for initial verify button =====
 class VerificationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -68,7 +74,7 @@ class VerificationView(discord.ui.View):
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VerificationForm())
 
-# ====== View: Approve or Reject ======
+# ===== View for Approve/Reject =====
 class ApproveRejectView(discord.ui.View):
     def __init__(self, user: discord.User, gender_text: str, age_text: str):
         super().__init__(timeout=None)
@@ -120,8 +126,8 @@ class ApproveRejectView(discord.ui.View):
 
             try:
                 await self.user.send(
-                    f"✅ Your verification has been approved!\n"
-                    f"✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง"
+                    "✅ Your verification has been approved!\n"
+                    "✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง"
                 )
             except:
                 pass
@@ -130,7 +136,6 @@ class ApproveRejectView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
 
-        # 👉 เปลี่ยนปุ่มให้เทา และแก้ข้อความปุ่ม
         for child in self.children:
             child.disabled = True
             if child.custom_id == "approve_button":
@@ -149,15 +154,20 @@ class ApproveRejectView(discord.ui.View):
 
         await interaction.response.send_message("❌ Rejected.", ephemeral=True)
 
-        # 👉 ปิดทุกปุ่ม + แก้ชื่อปุ่มที่กด
         for child in self.children:
             child.disabled = True
             if child.custom_id == "reject_button":
                 child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
         await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
-# ====== Embed Sender ======
-async def send_verification_embed(channel: discord.TextChannel):
+# ===== Admin-only command to post verification embed =====
+@bot.command(name="verify_embed")
+@commands.has_permissions(administrator=True)
+async def verify_embed(ctx):
+    channel = ctx.guild.get_channel(VERIFY_CHANNEL_ID)
+    if not channel:
+        await ctx.send("❌ VERIFY_CHANNEL_ID not found.")
+        return
     embed = discord.Embed(
         title="📌 Welcome / ยินดีต้อนรับ",
         description="Click the button below to verify your identity.\nกดปุ่มด้านล่างเพื่อยืนยันตัวตนของคุณ",
@@ -166,23 +176,13 @@ async def send_verification_embed(channel: discord.TextChannel):
     embed.set_image(url="https://i.pinimg.com/originals/da/79/68/da7968c54b12ba7ebf7dfd70dd1faaf2.gif")
     embed.set_footer(text="Verification System / ระบบยืนยันตัวตนโดย Bot")
     await channel.send(embed=embed, view=VerificationView())
+    await ctx.send(f"✅ Embed sent to {channel.mention}")
 
-# ====== Persistent View Loader ======
+# ===== Persistent view loader =====
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
 
-# ====== Admin command to resend embed ======
-@bot.command(name="verify_embed")
-@commands.has_permissions(administrator=True)
-async def verify_embed(ctx):
-    channel = ctx.guild.get_channel(VERIFY_CHANNEL_ID)
-    if not channel:
-        await ctx.send("❌ VERIFY_CHANNEL_ID not found.")
-        return
-    await send_verification_embed(channel)
-    await ctx.send(f"✅ Verification embed sent to {channel.mention}")
-
-# ====== Run bot ======
+# ===== Run bot =====
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))

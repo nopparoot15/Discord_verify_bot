@@ -3,8 +3,8 @@ import discord
 from discord.ext import commands
 
 # ====== CONFIGURATION ======
-VERIFY_CHANNEL_ID = 123456789012345678  # ห้องที่ใช้โพสต์ Embed ปุ่มยืนยัน
-APPROVAL_CHANNEL_ID = 987654321098765432  # ห้องรอแอดมินอนุมัติ
+VERIFY_CHANNEL_ID = 1402889712888447037  # ห้องที่ใช้โพสต์ Embed ปุ่มยืนยัน
+APPROVAL_CHANNEL_ID = 1402889786712395859  # ห้องรอแอดมินอนุมัติ
 
 ROLE_ID_TO_GIVE = 1321268883088211981  # Role หลัก
 ROLE_MALE = 1321268883025559689

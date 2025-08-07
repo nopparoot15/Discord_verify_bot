@@ -76,7 +76,7 @@ class ApproveRejectView(discord.ui.View):
         self.gender_text = gender_text.strip().lower()
         self.age_text = age_text.strip()
 
-    @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         member = interaction.guild.get_member(self.user.id)
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
@@ -118,16 +118,11 @@ class ApproveRejectView(discord.ui.View):
             if age_role:
                 await member.add_roles(age_role, reason="Age")
 
-            role_msg = f"✅ You have been verified and received roles:\n- {general_role.name}\n- {gender_role.name}"
-            if age_role:
-                role_msg += f"\n- {age_role.name}"
-            role_msg += "\n\n✅ คุณได้รับการยืนยันตัวตนและได้รับ Role:\n"
-            role_msg += f"- {general_role.name}\n- {gender_role.name}"
-            if age_role:
-                role_msg += f"\n- {age_role.name}"
-
             try:
-                await self.user.send(role_msg)
+                await self.user.send(
+                    f"✅ Your verification has been approved!\n"
+                    f"✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง"
+                )
             except:
                 pass
 
@@ -135,10 +130,14 @@ class ApproveRejectView(discord.ui.View):
         else:
             await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
 
-        self.disable_all_items()
+        # 👉 เปลี่ยนปุ่มให้เทา และแก้ข้อความปุ่ม
+        for child in self.children:
+            child.disabled = True
+            if child.custom_id == "approve_button":
+                child.label = "✅ You approved this."
         await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
-    @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await self.user.send(
@@ -147,8 +146,14 @@ class ApproveRejectView(discord.ui.View):
             )
         except:
             pass
+
         await interaction.response.send_message("❌ Rejected.", ephemeral=True)
-        self.disable_all_items()
+
+        # 👉 ปิดทุกปุ่ม + แก้ชื่อปุ่มที่กด
+        for child in self.children:
+            child.disabled = True
+            if child.custom_id == "reject_button":
+                child.label = "❌ You rejected this."
         await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
 # ====== Embed Sender ======

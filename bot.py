@@ -1,10 +1,12 @@
+import os
 import discord
 from discord.ext import commands
 
-# === CONFIG: IDs ===
+# ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 123456789012345678
 APPROVAL_CHANNEL_ID = 987654321098765432
-ROLE_ID_TO_GIVE = 1321268883088211981
+
+ROLE_ID_TO_GIVE = 1321268883088211981  # Role หลัก
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
@@ -14,6 +16,7 @@ ROLE_21_28 = 1344232979647565924
 ROLE_29_35 = 1344233048593403955
 ROLE_36_UP = 1344233119229939763
 
+# ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -21,7 +24,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === Modal ===
+# ====== Modal (Form) ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(label="Name / ชื่อ", required=True)
     age = discord.ui.TextInput(label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)", required=True)
@@ -55,7 +58,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             ephemeral=True
         )
 
-# === View: ปุ่มยืนยันตัวตน ===
+# ====== View: Button to open Modal ======
 class VerificationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -64,7 +67,7 @@ class VerificationView(discord.ui.View):
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VerificationForm())
 
-# === View: ปุ่มอนุมัติ / ปฏิเสธ ===
+# ====== View: Approve or Reject ======
 class ApproveRejectView(discord.ui.View):
     def __init__(self, user: discord.User, gender_text: str, age_text: str):
         super().__init__(timeout=None)
@@ -109,24 +112,25 @@ class ApproveRejectView(discord.ui.View):
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
         if member and general_role and gender_role:
+            await member.add_roles(general_role, reason="Verified")
+            await member.add_roles(gender_role, reason="Gender")
+            if age_role:
+                await member.add_roles(age_role, reason="Age")
+
+            role_msg = f"✅ You have been verified and received roles:\n- {general_role.name}\n- {gender_role.name}"
+            if age_role:
+                role_msg += f"\n- {age_role.name}"
+            role_msg += "\n\n✅ คุณได้รับการยืนยันตัวตนและได้รับ Role:\n"
+            role_msg += f"- {general_role.name}\n- {gender_role.name}"
+            if age_role:
+                role_msg += f"\n- {age_role.name}"
+
             try:
-                await member.add_roles(general_role, reason="Verified")
-                await member.add_roles(gender_role, reason="Gender")
-                if age_role:
-                    await member.add_roles(age_role, reason="Age")
-
-                role_msg = f"✅ You have been verified and received roles:\n- {general_role.name}\n- {gender_role.name}"
-                if age_role:
-                    role_msg += f"\n- {age_role.name}"
-                role_msg += "\n\n✅ คุณได้รับการยืนยันตัวตนและได้รับ Role:\n"
-                role_msg += f"- {general_role.name}\n- {gender_role.name}"
-                if age_role:
-                    role_msg += f"\n- {age_role.name}"
-
                 await self.user.send(role_msg)
-                await interaction.response.send_message("✅ Approved and roles assigned.", ephemeral=True)
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            except:
+                pass
+
+            await interaction.response.send_message("✅ Approved and roles assigned.", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
 
@@ -146,7 +150,7 @@ class ApproveRejectView(discord.ui.View):
         self.disable_all_items()
         await interaction.message.edit(view=self)
 
-# === Embed Function ===
+# ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):
     embed = discord.Embed(
         title="📌 Welcome / ยินดีต้อนรับ",
@@ -157,19 +161,13 @@ async def send_verification_embed(channel: discord.TextChannel):
     embed.set_footer(text="Verification System / ระบบยืนยันตัวตนโดย Bot")
     await channel.send(embed=embed, view=VerificationView())
 
-# === บอทรัน + โหลด persistent view ===
+# ====== Persistent View Loader ======
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
-    guild = discord.utils.get(bot.guilds)
-    if not guild:
-        return
-    channel = guild.get_channel(VERIFY_CHANNEL_ID)
-    if channel:
-        await send_verification_embed(channel)
 
-# === คำสั่ง !verify_embed (เฉพาะแอดมิน) ===
+# ====== Admin command to resend embed ======
 @bot.command(name="verify_embed")
 @commands.has_permissions(administrator=True)
 async def verify_embed(ctx):
@@ -180,5 +178,5 @@ async def verify_embed(ctx):
     await send_verification_embed(channel)
     await ctx.send(f"✅ Verification embed sent to {channel.mention}")
 
-# === Run Bot ===
-bot.run("YOUR_BOT_TOKEN")
+# ====== Run bot with token from .env ======
+bot.run(os.getenv("DISCORD_BOT_TOKEN"))

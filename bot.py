@@ -134,7 +134,7 @@ class ApproveRejectView(discord.ui.View):
         for child in self.children:
             child.disabled = True
             if child.custom_id == "approve_button":
-                child.label = "✅ You approved this."
+                child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
         await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
@@ -153,7 +153,7 @@ class ApproveRejectView(discord.ui.View):
         for child in self.children:
             child.disabled = True
             if child.custom_id == "reject_button":
-                child.label = "❌ You rejected this."
+                child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
         await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
 # ====== Embed Sender ======

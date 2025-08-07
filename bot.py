@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
 
-ROLE_ID_TO_GIVE = 1321268883088211981  # Role หลัก
+ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
@@ -27,6 +27,8 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 pending_verifications = set()
+
+INVALID_CHARS = set("=+*/@#$%^&*()<>?|{}[]\"'\\~`")
 
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
@@ -52,18 +54,12 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        if any(char.isdigit() for char in self.name.value):
-            await interaction.response.send_message(
-                "❌ Name should not contain numbers.\n❌ ชื่อห้ามมีตัวเลข",
-                ephemeral=True
-            )
+        if any(char.isdigit() for char in self.name.value) or any(c in INVALID_CHARS for c in self.name.value):
+            await interaction.response.send_message("❌ Name should not contain numbers or symbols.\n❌ ชื่อห้ามมีตัวเลขหรือสัญลักษณ์", ephemeral=True)
             return
 
-        if any(char.isdigit() for char in self.gender.value):
-            await interaction.response.send_message(
-                "❌ Gender should not contain numbers.\n❌ เพศห้ามมีตัวเลข",
-                ephemeral=True
-            )
+        if any(char.isdigit() for char in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
+            await interaction.response.send_message("❌ Gender should not contain numbers or symbols.\n❌ เพศห้ามมีตัวเลขหรือสัญลักษณ์", ephemeral=True)
             return
 
         pending_verifications.add(interaction.user.id)
@@ -75,8 +71,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
 
         now = datetime.now(timezone(timedelta(hours=7)))
-        formatted_time = now.strftime("%d/%m/%Y %H:%M")
-        embed.add_field(name="📅 Sent at", value=f"{formatted_time}", inline=False)
+        embed.add_field(name="📅 Sent at", value=now.strftime("%d/%m/%Y %H:%M"), inline=False)
         embed.set_footer(text=f"User ID: {interaction.user.id}")
 
         channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
@@ -110,6 +105,10 @@ class ApproveRejectView(discord.ui.View):
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         member = interaction.guild.get_member(self.user.id)
+        if not member:
+            await interaction.response.send_message("❌ Member not found in guild.", ephemeral=True)
+            return
+
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
 
         male = {"male", "man", "m", "boy", "ชาย", "เพศชาย", "ผู้ชาย", "ช"}
@@ -154,41 +153,52 @@ class ApproveRejectView(discord.ui.View):
             pending_verifications.discard(self.user.id)
 
             try:
-                await self.user.send(
-                    f"✅ Your verification has been approved!\n"
-                    f"✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง"
-                )
+                await self.user.send("✅ Your verification has been approved!\n✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง")
             except:
                 pass
 
-            await interaction.response.send_message("✅ Approved and roles assigned.", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("✅ Approved and roles assigned.", ephemeral=True)
+            else:
+                await interaction.response.send_message("✅ Approved and roles assigned.", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
 
         for child in self.children:
             child.disabled = True
             if child.custom_id == "approve_button":
                 child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
-        await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
+
+        try:
+            await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
+        except discord.NotFound:
+            pass
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         pending_verifications.discard(self.user.id)
         try:
-            await self.user.send(
-                "❌ Your verification was rejected. Please contact admin.\n"
-                "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
-            )
+            await self.user.send("❌ Your verification was rejected. Please contact admin.\n❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน")
         except:
             pass
 
-        await interaction.response.send_message("❌ Rejected.", ephemeral=True)
+        try:
+            await interaction.response.send_message("❌ Rejected.", ephemeral=True)
+        except:
+            await interaction.followup.send("❌ Rejected.", ephemeral=True)
 
         for child in self.children:
             child.disabled = True
             if child.custom_id == "reject_button":
                 child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
-        await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
+
+        try:
+            await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
+        except discord.NotFound:
+            pass
 
 # ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):

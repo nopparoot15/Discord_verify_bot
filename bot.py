@@ -3,8 +3,8 @@ import discord
 from discord.ext import commands
 
 # ====== CONFIGURATION ======
-VERIFY_CHANNEL_ID = 1402889712888447037
-APPROVAL_CHANNEL_ID = 1402889786712395859
+VERIFY_CHANNEL_ID = 123456789012345678  # ห้องที่ใช้โพสต์ Embed ปุ่มยืนยัน
+APPROVAL_CHANNEL_ID = 987654321098765432  # ห้องรอแอดมินอนุมัติ
 
 ROLE_ID_TO_GIVE = 1321268883088211981  # Role หลัก
 ROLE_MALE = 1321268883025559689
@@ -24,7 +24,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ====== Modal (Form) ======
+# ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(label="Name / ชื่อ", required=True)
     age = discord.ui.TextInput(label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)", required=True)
@@ -42,6 +42,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             return
 
         embed = discord.Embed(title="Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
         embed.add_field(name="Name / ชื่อ", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
@@ -135,7 +136,7 @@ class ApproveRejectView(discord.ui.View):
             await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
 
         self.disable_all_items()
-        await interaction.message.edit(view=self)
+        await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -148,7 +149,7 @@ class ApproveRejectView(discord.ui.View):
             pass
         await interaction.response.send_message("❌ Rejected.", ephemeral=True)
         self.disable_all_items()
-        await interaction.message.edit(view=self)
+        await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
 
 # ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):
@@ -178,5 +179,5 @@ async def verify_embed(ctx):
     await send_verification_embed(channel)
     await ctx.send(f"✅ Verification embed sent to {channel.mention}")
 
-# ====== Run bot with token from .env ======
+# ====== Run bot ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))

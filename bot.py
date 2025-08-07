@@ -163,7 +163,7 @@ async def send_verification_embed(channel: discord.TextChannel):
         description="Click the button below to verify your identity.\nกดปุ่มด้านล่างเพื่อยืนยันตัวตนของคุณ",
         color=discord.Color.blue()
     )
-    embed.set_image(url="https://i.imgur.com/B4w7hql.jpeg")
+    embed.set_image(url="https://i.pinimg.com/originals/da/79/68/da7968c54b12ba7ebf7dfd70dd1faaf2.gif")
     embed.set_footer(text="Verification System / ระบบยืนยันตัวตนโดย Bot")
     await channel.send(embed=embed, view=VerificationView())
 

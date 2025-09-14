@@ -30,6 +30,157 @@ pending_verifications = set()
 
 INVALID_CHARS = set("=+*/@#$%^&*()<>?|{}[]\"'\\~`")
 
+# ====== Gender Normalizer & Aliases (Multilingual) ======
+def _norm_gender(s: str) -> str:
+    """Lowercase + strip + remove common separators to make matching forgiving."""
+    s = (s or "").strip().lower()
+    s = re.sub(r'[\s\.\-_\/\\]+', '', s)
+    return s
+
+# Male aliases
+_MALE_ALIASES_RAW = {
+    # Thai
+    "ช", "ชา", "ชาย", "ผู้ชาย", "เพศชาย", "ผช", "ชายแท้", "หนุ่ม",
+    # English
+    "male", "man", "boy", "m", "masculine", "he", "him",
+    # Chinese
+    "男", "男性", "男生", "男人",
+    # Japanese
+    "男", "男性", "おとこ", "だんせい",
+    # Korean
+    "남", "남자", "남성",
+    # Vietnamese
+    "nam", "đàn ông", "dan ong", "con trai", "nam giới", "namgioi",
+    # Indonesian / Malay
+    "pria", "laki", "laki-laki", "lelaki", "cowok",
+    # Filipino
+    "lalaki",
+    # Hindi / Urdu
+    "पुरुष", "aadmi", "ladka", "पुरूष", "mard", "आदमी", "مرد",
+    # Arabic
+    "ذكر", "رجل", "صبي",
+    # Turkish
+    "erkek", "bay",
+    # Russian / Ukrainian
+    "мужчина", "парень", "мальчик", "чоловік", "хлопець",
+    # European
+    "hombre", "masculino", "chico", "varon", "varón",   # ES
+    "homem", "masculino", "rapaz",                      # PT
+    "homme", "masculin", "garçon",                      # FR
+    "mann", "männlich", "junge",                        # DE
+    "uomo", "maschio", "ragazzo",                       # IT
+    "mezczyzna", "mężczyzna", "chlopak", "chłopak",     # PL (+ascii)
+    "muž", "chlapec",                                   # CS/SK
+    "andras", "άνδρας", "arseniko", "αρσενικό", "agori", "αγόρι",  # EL
+    # SE Asia more
+    "ຜູ້ຊາຍ",                    # Lao
+    "ប្រុស", "បុរស",             # Khmer
+    "ယောက်ျား", "အမျိုးသား",        # Burmese
+}
+
+# Female aliases
+_FEMALE_ALIASES_RAW = {
+    # Thai
+    "ห", "หญ", "หญิ", "หญิง", "ผู้หญิง", "เพศหญิง", "ผญ", "สาว", "ญ",
+    # English
+    "female", "woman", "girl", "f", "feminine", "she", "her",
+    # Chinese
+    "女", "女性", "女生", "女人",
+    # Japanese
+    "女", "女性", "おんな", "じょせい",
+    # Korean
+    "여", "여자", "여성",
+    # Vietnamese
+    "nữ", "phụ nữ", "con gái",
+    # Indonesian / Malay
+    "wanita", "perempuan", "cewek",
+    # Filipino
+    "babae", "dalaga",
+    # Hindi / Urdu
+    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "خاتون",
+    # Arabic
+    "أنثى", "امرأة", "بنت", "فتاة",
+    # Turkish
+    "kadın", "bayan", "kız",
+    # Russian / Ukrainian
+    "женщина", "девушка", "девочка", "жінка", "дівчина",
+    # European
+    "mujer", "femenino", "chica",                # ES
+    "mulher", "feminina", "menina",              # PT
+    "femme", "féminin", "fille",                 # FR
+    "frau", "weiblich", "mädchen",               # DE
+    "donna", "femmina", "ragazza",               # IT
+    "kobieta", "dziewczyna", "zenska", "żeńska", # PL (+ascii)
+    "žena", "dívka",                              # CS/SK
+    "gynaika", "γυναίκα", "thyliko", "θηλυκό", "koritsi", "κορίτσι",  # EL
+    # SE Asia more
+    "ຜູ້ຍິງ",                    # Lao
+    "ស្រី", "នារី",               # Khmer
+    "မိန်းမ", "အမျိုးသမီး",         # Burmese
+}
+
+# LGBT / non-binary / unspecified → map to LGBT role
+_LGBT_ALIASES_RAW = {
+    # English & common
+    "lgbt", "lgbtq", "lgbtq+", "nonbinary", "non-binary", "nb", "enby",
+    "trans", "transgender", "genderqueer", "bigender", "agender", "genderfluid",
+    "queer", "other", "prefernottosay", "unspecified", "none",
+    # Thai
+    "เพศทางเลือก", "ไม่ระบุ", "อื่นๆ", "ไม่บอก", "ไบ", "ทอม", "ดี้", "สาวสอง", "สาวประเภทสอง",
+    # Chinese / JP / KR (selected)
+    "非二元", "跨性别", "酷儿", "双性恋",
+    "ノンバイナリー", "xジェンダー", "トランス", "クィア", "同性愛", "両性愛",
+    "논바이너리", "트랜스", "퀴어", "양성애", "동성애",
+    # Others
+    "androgynous", "pangender", "demiboy", "demigirl",
+}
+
+MALE_ALIASES   = {_norm_gender(x) for x in _MALE_ALIASES_RAW}
+FEMALE_ALIASES = {_norm_gender(x) for x in _FEMALE_ALIASES_RAW}
+LGBT_ALIASES   = {_norm_gender(x) for x in _LGBT_ALIASES_RAW}
+
+# Accept prefixes (short-hand startswith)
+MALE_PREFIXES = {_norm_gender(x) for x in [
+    "ช", "ชา", "ชาย", "ผู้ช", "เพศช",
+    "m", "ma", "masc", "man",
+    "男", "おとこ", "だん", "남",
+]}
+FEMALE_PREFIXES = {_norm_gender(x) for x in [
+    "ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห",
+    "f", "fe", "fem", "woman", "wo",
+    "女", "おんな", "じょ", "여",
+]}
+
+def resolve_gender_role_id(text: str) -> int:
+    t = _norm_gender(text)
+    if t in MALE_ALIASES or any(t.startswith(p) for p in MALE_PREFIXES):
+        return ROLE_MALE
+    if t in FEMALE_ALIASES or any(t.startswith(p) for p in FEMALE_PREFIXES):
+        return ROLE_FEMALE
+    if t in LGBT_ALIASES:
+        return ROLE_LGBT
+    # Fallback: keep inclusive by default
+    return ROLE_LGBT
+
+def resolve_age_role_id(age_text: str) -> int | None:
+    try:
+        age = int((age_text or "").strip())
+    except ValueError:
+        return None
+    if 0 <= age <= 10:
+        return ROLE_0_10
+    elif 10 < age <= 15:
+        return ROLE_10_15
+    elif 16 <= age <= 20:
+        return ROLE_16_20
+    elif 21 <= age <= 28:
+        return ROLE_21_28
+    elif 29 <= age <= 35:
+        return ROLE_29_35
+    elif age >= 36:
+        return ROLE_36_UP
+    return None
+
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(label="Name / ชื่อ", required=True)
@@ -37,29 +188,40 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     gender = discord.ui.TextInput(label="Gender / เพศ", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # ACK ทันที กัน timeout หากมีขั้นตอนส่งข้อความ/สร้าง view
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        # เช็คซ้ำ
         if interaction.user.id in pending_verifications:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❗ You already submitted a verification request. Please wait for admin review.\n"
                 "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
                 ephemeral=True
             )
             return
 
-        age_str = self.age.value.strip()
+        age_str = (self.age.value or "").strip()
         if not re.fullmatch(r"\d{1,3}", age_str):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Please enter a valid number for age (1–3 digits, no symbols or letters).\n"
-                "❌ กรุณากรอกอายุเป็นตัวเลขล้วน ไม่เกิน 3 หลัก และห้ามมีสัญลักษณ์หรือตัวอักษรใดๆ เช่น + / a ข",
+                "❌ กรุณากรอกอายุเป็นตัวเลขล้วน ไม่เกิน 3 หลัก และห้ามมีสัญลักษณ์หรือตัวอักษร เช่น + / a ข",
                 ephemeral=True
             )
             return
 
         if any(char.isdigit() for char in self.name.value) or any(c in INVALID_CHARS for c in self.name.value):
-            await interaction.response.send_message("❌ Name should not contain numbers or symbols.\n❌ ชื่อห้ามมีตัวเลขหรือสัญลักษณ์", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Name should not contain numbers or symbols.\n❌ ชื่อห้ามมีตัวเลขหรือสัญลักษณ์",
+                ephemeral=True
+            )
             return
 
         if any(char.isdigit() for char in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
-            await interaction.response.send_message("❌ Gender should not contain numbers or symbols.\n❌ เพศห้ามมีตัวเลขหรือสัญลักษณ์", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Gender should not contain numbers or symbols.\n❌ เพศห้ามมีตัวเลขหรือสัญลักษณ์",
+                ephemeral=True
+            )
             return
 
         pending_verifications.add(interaction.user.id)
@@ -77,9 +239,15 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
         if channel:
             view = ApproveRejectView(user=interaction.user, gender_text=self.gender.value, age_text=self.age.value)
-            await channel.send(content=interaction.user.mention, embed=embed, view=view)
+            # ป้องกัน @everyone/@here โดย allow เฉพาะ user mention
+            await channel.send(
+                content=interaction.user.mention,
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+            )
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "✅ Your verification request has been submitted. Please wait for admin approval.\n"
             "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน",
             ephemeral=True
@@ -99,16 +267,16 @@ class ApproveRejectView(discord.ui.View):
     def __init__(self, user: discord.User, gender_text: str, age_text: str):
         super().__init__(timeout=None)
         self.user = user
-        self.gender_text = gender_text.strip().lower()
-        self.age_text = age_text.strip()
+        self.gender_text = (gender_text or "").strip()
+        self.age_text = (age_text or "").strip()
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 1) ACK ไว้ก่อนกัน timeout
+        # 1) ACK ก่อน กัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        # 2) หา member (ถ้า cache ไม่เจอ ลอง fetch)
+        # 2) หา member (ถ้า cache ไม่มีให้ fetch)
         member = interaction.guild.get_member(self.user.id)
         if not member:
             try:
@@ -118,38 +286,9 @@ class ApproveRejectView(discord.ui.View):
                 return
 
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
-
-        male = {"male", "man", "m", "boy", "ชาย", "เพศชาย", "ผู้ชาย", "ช"}
-        female = {"female", "f", "woman", "girl", "หญิง", "เพศหญิง", "ผู้หญิง", "ญ"}
-
-        gender_role_id = ROLE_LGBT
-        if self.gender_text in male:
-            gender_role_id = ROLE_MALE
-        elif self.gender_text in female:
-            gender_role_id = ROLE_FEMALE
-
+        gender_role_id = resolve_gender_role_id(self.gender_text)
         gender_role = interaction.guild.get_role(gender_role_id)
-
-        try:
-            age = int(self.age_text)
-        except ValueError:
-            age = -1
-
-        if 0 <= age <= 10:
-            age_role_id = ROLE_0_10
-        elif 10 < age <= 15:
-            age_role_id = ROLE_10_15
-        elif 16 <= age <= 20:
-            age_role_id = ROLE_16_20
-        elif 21 <= age <= 28:
-            age_role_id = ROLE_21_28
-        elif 29 <= age <= 35:
-            age_role_id = ROLE_29_35
-        elif age >= 36:
-            age_role_id = ROLE_36_UP
-        else:
-            age_role_id = None
-
+        age_role_id = resolve_age_role_id(self.age_text)
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
         # 3) ให้ roles ทีเดียว ลดเวลา
@@ -157,37 +296,42 @@ class ApproveRejectView(discord.ui.View):
             roles_to_add = [general_role, gender_role]
             if age_role:
                 roles_to_add.append(age_role)
+
             try:
                 await member.add_roles(*roles_to_add, reason="Verified")
             except discord.Forbidden:
                 await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
                 return
+            except discord.HTTPException:
+                await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
+                return
 
             pending_verifications.discard(self.user.id)
 
-            # DM ผู้ใช้ (ไม่ให้ fail ทำล้ม flow)
+            # DM ผู้ใช้ (ไม่ให้ error ทำ flow ล่ม)
             try:
-                await self.user.send("✅ Your verification has been approved!\n✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง")
+                await self.user.send(
+                    "✅ Your verification has been approved!\n"
+                    "✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง"
+                )
             except Exception:
                 pass
 
-            # 4) ตอบกลับผ่าน followup (เพราะเรา defer ไปแล้ว)
             await interaction.followup.send("✅ Approved and roles assigned.", ephemeral=True)
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
-        # 5) ปิดปุ่ม และแก้ label ที่ปุ่มที่กด
+        # 4) ปิดปุ่ม และแก้ label
         for child in self.children:
             child.disabled = True
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
 
-        # 6) แก้ view บนข้อความเดิม
+        # 5) อัปเดต view บนข้อความเดิม
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
-
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -195,8 +339,12 @@ class ApproveRejectView(discord.ui.View):
             await interaction.response.defer(ephemeral=True)
 
         pending_verifications.discard(self.user.id)
+
         try:
-            await self.user.send("❌ Your verification was rejected. Please contact admin.\n❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน")
+            await self.user.send(
+                "❌ Your verification was rejected. Please contact admin.\n"
+                "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
+            )
         except Exception:
             pass
 
@@ -211,7 +359,6 @@ class ApproveRejectView(discord.ui.View):
             await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
-
 
 # ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):
@@ -228,6 +375,7 @@ async def send_verification_embed(channel: discord.TextChannel):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+    # Register persistent Verify button
     bot.add_view(VerificationView())
 
 # ====== Admin command to resend embed ======
@@ -244,7 +392,7 @@ async def verify_embed(ctx):
 @bot.command(name="userinfo")
 @commands.has_permissions(administrator=True)
 async def userinfo(ctx, member: discord.Member):
-    # ดึงข้อความล่าสุดในห้อง APPROVAL_CHANNEL_ID ที่เกี่ยวกับ user นี้
+    """ดึง embed คำขอยืนยันล่าสุดของ user จากห้อง APPROVAL"""
     channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")

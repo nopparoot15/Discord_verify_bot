@@ -104,10 +104,18 @@ class ApproveRejectView(discord.ui.View):
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 1) ACK ไว้ก่อนกัน timeout
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        # 2) หา member (ถ้า cache ไม่เจอ ลอง fetch)
         member = interaction.guild.get_member(self.user.id)
         if not member:
-            await interaction.response.send_message("❌ Member not found in guild.", ephemeral=True)
-            return
+            try:
+                member = await interaction.guild.fetch_member(self.user.id)
+            except Exception:
+                await interaction.followup.send("❌ Member not found in guild.", ephemeral=True)
+                return
 
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
 
@@ -144,61 +152,66 @@ class ApproveRejectView(discord.ui.View):
 
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
+        # 3) ให้ roles ทีเดียว ลดเวลา
         if member and general_role and gender_role:
-            await member.add_roles(general_role, reason="Verified")
-            await member.add_roles(gender_role, reason="Gender")
+            roles_to_add = [general_role, gender_role]
             if age_role:
-                await member.add_roles(age_role, reason="Age")
+                roles_to_add.append(age_role)
+            try:
+                await member.add_roles(*roles_to_add, reason="Verified")
+            except discord.Forbidden:
+                await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
+                return
 
             pending_verifications.discard(self.user.id)
 
+            # DM ผู้ใช้ (ไม่ให้ fail ทำล้ม flow)
             try:
                 await self.user.send("✅ Your verification has been approved!\n✅ คุณได้รับการอนุมัติแล้วและได้รับ Role ที่เกี่ยวข้อง")
-            except:
+            except Exception:
                 pass
 
-            if interaction.response.is_done():
-                await interaction.followup.send("✅ Approved and roles assigned.", ephemeral=True)
-            else:
-                await interaction.response.send_message("✅ Approved and roles assigned.", ephemeral=True)
+            # 4) ตอบกลับผ่าน followup (เพราะเรา defer ไปแล้ว)
+            await interaction.followup.send("✅ Approved and roles assigned.", ephemeral=True)
         else:
-            if interaction.response.is_done():
-                await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Member or role not found.", ephemeral=True)
+            await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
+        # 5) ปิดปุ่ม และแก้ label ที่ปุ่มที่กด
         for child in self.children:
             child.disabled = True
-            if child.custom_id == "approve_button":
+            if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
 
+        # 6) แก้ view บนข้อความเดิม
         try:
-            await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
+            await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
+
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
         pending_verifications.discard(self.user.id)
         try:
             await self.user.send("❌ Your verification was rejected. Please contact admin.\n❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน")
-        except:
+        except Exception:
             pass
 
-        try:
-            await interaction.response.send_message("❌ Rejected.", ephemeral=True)
-        except:
-            await interaction.followup.send("❌ Rejected.", ephemeral=True)
+        await interaction.followup.send("❌ Rejected.", ephemeral=True)
 
         for child in self.children:
             child.disabled = True
-            if child.custom_id == "reject_button":
+            if getattr(child, "custom_id", None) == "reject_button":
                 child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
 
         try:
-            await interaction.followup.edit_message(message_id=interaction.message.id, view=self)
+            await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
+
 
 # ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):

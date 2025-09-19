@@ -435,11 +435,9 @@ class ApproveRejectView(discord.ui.View):
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ACK กัน timeout
         if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-
-        # หา member
+            await interaction.response.defer()
+    
         member = interaction.guild.get_member(self.user.id)
         if not member:
             try:
@@ -447,19 +445,17 @@ class ApproveRejectView(discord.ui.View):
             except Exception:
                 await interaction.followup.send("❌ Member not found in guild.", ephemeral=True)
                 return
-
+    
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
         gender_role_id = resolve_gender_role_id(self.gender_text)
         gender_role = interaction.guild.get_role(gender_role_id)
         age_role_id = resolve_age_role_id(self.age_text)
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
-
-        # ใส่ roles ทีเดียว
+    
         if member and general_role and gender_role:
             roles_to_add = [general_role, gender_role]
             if age_role:
                 roles_to_add.append(age_role)
-
             try:
                 await member.add_roles(*roles_to_add, reason="Verified")
             except discord.Forbidden:
@@ -468,8 +464,7 @@ class ApproveRejectView(discord.ui.View):
             except discord.HTTPException:
                 await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
                 return
-
-            # --- ตั้งนิคเนม: <ฐานชื่อ> (ชื่อเล่น) ---
+    
             nick_msg = ""
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
@@ -489,10 +484,9 @@ class ApproveRejectView(discord.ui.View):
                     nick_msg = "⚠️ สิทธิ์ไม่พอในการตั้งชื่อ"
                 except discord.HTTPException:
                     nick_msg = "⚠️ ตั้งชื่อไม่สำเร็จ (HTTP error)"
-
+    
             pending_verifications.discard(self.user.id)
-
-            # DM ผู้ใช้ (ignore errors)
+    
             try:
                 await self.user.send(
                     "✅ Your verification has been approved!\n"
@@ -500,42 +494,53 @@ class ApproveRejectView(discord.ui.View):
                 )
             except Exception:
                 pass
-
-            # ไม่ต้องส่งข้อความยืนยันซ้ำซ้อน; แจ้งเฉพาะกรณีมีคำเตือนนิคเนม
+    
             if nick_msg:
                 await interaction.followup.send(nick_msg, ephemeral=True)
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
-
-        # ปิดปุ่ม (ไม่เปลี่ยนข้อความบนปุ่ม)
+    
+        # === อัปเดตปุ่ม: ปุ่มที่กดคงสีเดิม, อีกปุ่มเป็นเทา และปิดทั้งหมด ===
         for child in self.children:
+            if getattr(child, "custom_id", None) == "approve_button":
+                child.label = "✅ Approved / อนุมัติแล้ว"
+                child.style = discord.ButtonStyle.success
+            elif getattr(child, "custom_id", None) == "reject_button":
+                child.style = discord.ButtonStyle.secondary  # ทำเป็นสีเทา
             child.disabled = True
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
 
-    @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
 
-        pending_verifications.discard(self.user.id)
-        try:
-            await self.user.send(
-                "❌ Your verification was rejected. Please contact admin.\n"
-                "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
-            )
-        except Exception:
-            pass
+@discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
+async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if not interaction.response.is_done():
+        await interaction.response.defer()
 
-        # ไม่ส่งข้อความ 'Rejected.' ซ้ำซ้อน
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except discord.NotFound:
-            pass
+    pending_verifications.discard(self.user.id)
+    try:
+        await self.user.send(
+            "❌ Your verification was rejected. Please contact admin.\n"
+            "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
+        )
+    except Exception:
+        await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
+
+    # === อัปเดตปุ่ม: ปุ่มที่กดคงสีแดง, อีกปุ่มเป็นเทา และปิดทั้งหมด ===
+    for child in self.children:
+        if getattr(child, "custom_id", None) == "reject_button":
+            child.label = "❌ Rejected / ปฏิเสธแล้ว"
+            child.style = discord.ButtonStyle.danger
+        elif getattr(child, "custom_id", None) == "approve_button":
+            child.style = discord.ButtonStyle.secondary  # ทำเป็นสีเทา
+        child.disabled = True
+    try:
+        await interaction.message.edit(view=self)
+    except discord.NotFound:
+        pass
+
 
 
 # ====== Embed Sender ======

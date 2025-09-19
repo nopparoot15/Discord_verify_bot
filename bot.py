@@ -1,5 +1,6 @@
 import os
 import re
+import io
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
@@ -181,6 +182,45 @@ def resolve_age_role_id(age_text: str) -> int | None:
         return ROLE_36_UP
     return None
 
+# ====== Helpers ======
+async def build_avatar_attachment(user: discord.User) -> tuple[discord.File | None, str | None]:
+    """
+    Download user's avatar and return as a Discord File attachment, preferring WEBP 512, falling back to PNG 512.
+    Returns (file, filename) or (None, None) on failure.
+    """
+    try:
+        # Prefer webp (smaller) then png
+        try:
+            asset = user.display_avatar.with_format("webp").with_size(512)
+            data = await asset.read()
+            filename = f"avatar_{user.id}.webp"
+        except Exception:
+            asset = user.display_avatar.with_static_format("png").with_size(512)
+            data = await asset.read()
+            filename = f"avatar_{user.id}.png"
+
+        f = discord.File(io.BytesIO(data), filename=filename)
+        return f, filename
+    except Exception:
+        return None, None
+
+def copy_embed_fields(src: discord.Embed) -> discord.Embed:
+    """Create a shallow copy of important visual bits of an embed (title, desc, color, fields, image)."""
+    e = discord.Embed(
+        title=src.title or discord.Embed.Empty,
+        description=src.description or discord.Embed.Empty,
+        color=src.color if src.color is not None else discord.Embed.Empty,
+    )
+    if src.author and (src.author.name or src.author.icon_url or src.author.url):
+        e.set_author(name=getattr(src.author, "name", discord.Embed.Empty) or discord.Embed.Empty)
+    if src.footer and (src.footer.text or src.footer.icon_url):
+        e.set_footer(text=getattr(src.footer, "text", discord.Embed.Empty) or discord.Embed.Empty)
+    if src.image and src.image.url:
+        e.set_image(url=src.image.url)
+    for f in src.fields:
+        e.add_field(name=f.name, value=f.value, inline=f.inline)
+    return e
+
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(label="Name / ชื่อ", required=True)
@@ -188,7 +228,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     gender = discord.ui.TextInput(label="Gender / เพศ", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ACK ทันที กัน timeout หากมีขั้นตอนส่งข้อความ/สร้าง view
+        # ACK ทันที กัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
@@ -227,7 +267,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         pending_verifications.add(interaction.user.id)
 
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url="attachment://avatar_placeholder.png")  # จะถูกแก้เป็นชื่อจริงตอนแนบไฟล์
         embed.add_field(name="Name / ชื่อ", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
@@ -239,13 +279,27 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
         if channel:
             view = ApproveRejectView(user=interaction.user, gender_text=self.gender.value, age_text=self.age.value)
-            # ป้องกัน @everyone/@here โดย allow เฉพาะ user mention
-            await channel.send(
-                content=interaction.user.mention,
-                embed=embed,
-                view=view,
-                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-            )
+
+            # --- แนบ avatar เป็นไฟล์เพื่อกันภาพหาย ---
+            avatar_file, filename = await build_avatar_attachment(interaction.user)
+            if avatar_file and filename:
+                embed.set_thumbnail(url=f"attachment://{filename}")
+                await channel.send(
+                    content=interaction.user.mention,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+                    file=avatar_file,
+                )
+            else:
+                # fallback (อาจหายเมื่อเปลี่ยนรูป)
+                embed.set_thumbnail(url=interaction.user.display_avatar.url)
+                await channel.send(
+                    content=interaction.user.mention,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+                )
 
         await interaction.followup.send(
             "✅ Your verification request has been submitted. Please wait for admin approval.\n"
@@ -272,11 +326,11 @@ class ApproveRejectView(discord.ui.View):
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 1) ACK ก่อน กัน timeout
+        # 1) ACK กัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        # 2) หา member (ถ้า cache ไม่มีให้ fetch)
+        # 2) หา member
         member = interaction.guild.get_member(self.user.id)
         if not member:
             try:
@@ -291,7 +345,7 @@ class ApproveRejectView(discord.ui.View):
         age_role_id = resolve_age_role_id(self.age_text)
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
-        # 3) ให้ roles ทีเดียว ลดเวลา
+        # 3) ให้ roles ทีเดียว
         if member and general_role and gender_role:
             roles_to_add = [general_role, gender_role]
             if age_role:
@@ -308,7 +362,7 @@ class ApproveRejectView(discord.ui.View):
 
             pending_verifications.discard(self.user.id)
 
-            # DM ผู้ใช้ (ไม่ให้ error ทำ flow ล่ม)
+            # DM ผู้ใช้ (ignore errors)
             try:
                 await self.user.send(
                     "✅ Your verification has been approved!\n"
@@ -327,7 +381,7 @@ class ApproveRejectView(discord.ui.View):
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
 
-        # 5) อัปเดต view บนข้อความเดิม
+        # 5) อัปเดต view
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
@@ -392,7 +446,11 @@ async def verify_embed(ctx):
 @bot.command(name="userinfo")
 @commands.has_permissions(administrator=True)
 async def userinfo(ctx, member: discord.Member):
-    """ดึง embed คำขอยืนยันล่าสุดของ user จากห้อง APPROVAL"""
+    """
+    ดึงคำขอยืนยันล่าสุดของ user จากห้อง APPROVAL
+    - ถ้าโพสต์ต้นฉบับมีไฟล์ avatar แนบอยู่ จะดึงไฟล์นั้นมา re-attach ใหม่
+      เพื่อให้ thumbnail แสดงผลได้ (attachment://...) ในข้อความนี้ด้วย
+    """
     channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
@@ -401,8 +459,24 @@ async def userinfo(ctx, member: discord.Member):
     async for message in channel.history(limit=200):
         if message.author == bot.user and message.embeds and message.mentions:
             if member in message.mentions:
-                embed = message.embeds[0]
-                await ctx.send(embed=embed)
+                orig = message.embeds[0]
+                new_embed = copy_embed_fields(orig)
+
+                # พยายามย้าย thumbnail มาเป็นไฟล์แนบในข้อความนี้
+                if message.attachments:
+                    try:
+                        att = message.attachments[0]
+                        data = await att.read()
+                        fname = att.filename or f"avatar_{member.id}.png"
+                        file = discord.File(io.BytesIO(data), filename=fname)
+                        new_embed.set_thumbnail(url=f"attachment://{fname}")
+                        await ctx.send(file=file, embed=new_embed)
+                        return
+                    except Exception:
+                        pass
+
+                # ถ้าไม่มีแนบในต้นฉบับ / อ่านไฟล์ไม่สำเร็จ -> ส่ง embed เดิม (อาจไม่มีรูป)
+                await ctx.send(embed=new_embed)
                 return
 
     await ctx.send("❌ No verification info found for this user.")

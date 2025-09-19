@@ -15,16 +15,20 @@ ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
 
 # --- Consolidated age roles (ใส่ ID เอง; ถ้า =0 จะไม่ให้ยศอายุ / ไม่มี fallback) ---
-ROLE_0_12    = 0
-ROLE_13_15   = 0
-ROLE_16_17   = 0
-ROLE_18_20   = 0
-ROLE_21_24   = 0
-ROLE_25_34   = 0
-ROLE_35_44   = 0
-ROLE_45_54   = 0
-ROLE_55_64   = 0
-ROLE_65_UP   = 0
+ROLE_0_12   = 1402907371696558131
+ROLE_13_15  = 1344232758129594379
+ROLE_16_18  = 1344232891093090377
+ROLE_19_21  = 1344232979647565924
+ROLE_22_24  = 1344233048593403955
+ROLE_25_29  = 1418703710137094357
+ROLE_30_34  = 1418703702843457576
+ROLE_35_39  = 1418703707100545075
+ROLE_40_44  = 1418703944711929917
+ROLE_45_49  = 1418703955176718396
+ROLE_50_54  = 1418704062592843948
+ROLE_55_59  = 1418704067194261615
+ROLE_60_64  = 1418704072617496666
+ROLE_65_UP  = 1418704076119736390
 
 # Toggle: ให้บอทเติม (ชื่อเล่น) ต่อท้ายชื่อในดิสเวล่าอนุมัติ
 APPEND_FORM_NAME_TO_NICK = True
@@ -173,11 +177,6 @@ def resolve_gender_role_id(text: str) -> int:
     return ROLE_LGBT
 
 def resolve_age_role_id(age_text: str) -> int | None:
-    """
-    จับคู่ช่วงอายุแบบรวบ (ไม่มี fallback):
-    - ถ้าช่วงที่ตรงกันมีการตั้ง Role ID (>0) จะคืนค่านั้น
-    - ถ้ายังไม่ได้ตั้ง (==0) จะคืน None เพื่อไม่ให้ยศอายุ
-    """
     try:
         age = int((age_text or "").strip())
     except ValueError:
@@ -186,14 +185,18 @@ def resolve_age_role_id(age_text: str) -> int | None:
     slots = [
         ((0, 12), ROLE_0_12),
         ((13, 15), ROLE_13_15),
-        ((16, 17), ROLE_16_17),
-        ((18, 20), ROLE_18_20),
-        ((21, 24), ROLE_21_24),
-        ((25, 34), ROLE_25_34),
-        ((35, 44), ROLE_35_44),
-        ((45, 54), ROLE_45_54),
-        ((55, 64), ROLE_55_64),
-        ((65, 200), ROLE_65_UP),  # 65+
+        ((16, 18), ROLE_16_18),
+        ((19, 21), ROLE_19_21),
+        ((22, 24), ROLE_22_24),
+        ((25, 29), ROLE_25_29),
+        ((30, 34), ROLE_30_34),
+        ((35, 39), ROLE_35_39),
+        ((40, 44), ROLE_40_44),
+        ((45, 49), ROLE_45_49),
+        ((50, 54), ROLE_50_54),
+        ((55, 59), ROLE_55_59),
+        ((60, 64), ROLE_60_64),
+        ((65, 200), ROLE_65_UP),
     ]
 
     for (lo, hi), rid in slots:
@@ -240,11 +243,6 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     return e
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
-    """
-    คืนค่านิคเนมรูปแบบ: <base> (<form_name>)
-    - ลบ (...) ท้ายชื่อเดิมถ้ามี เพื่อไม่ซ้ำซ้อน
-    - จำกัดความยาว 32 ตัวอักษรตามข้อกำหนด Discord
-    """
     base = (member.nick or member.name or "").strip()
     base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
     real = (form_name or "").strip()

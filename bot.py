@@ -13,12 +13,21 @@ ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
-ROLE_0_10 = 1402907371696558131
-ROLE_10_15 = 1344232758129594379
-ROLE_16_20 = 1344232891093090377
-ROLE_21_28 = 1344232979647565924
-ROLE_29_35 = 1344233048593403955
-ROLE_36_UP = 1344233119229939763
+
+# --- Consolidated age roles (ใส่ ID เอง; ถ้า =0 จะไม่ให้ยศอายุ / ไม่มี fallback) ---
+ROLE_0_12    = 0
+ROLE_13_15   = 0
+ROLE_16_17   = 0
+ROLE_18_20   = 0
+ROLE_21_24   = 0
+ROLE_25_34   = 0
+ROLE_35_44   = 0
+ROLE_45_54   = 0
+ROLE_55_64   = 0
+ROLE_65_UP   = 0
+
+# Toggle: ให้บอทเติม (ชื่อเล่น) ต่อท้ายชื่อในดิสเวล่าอนุมัติ
+APPEND_FORM_NAME_TO_NICK = True
 
 # ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
@@ -65,18 +74,18 @@ _MALE_ALIASES_RAW = {
     # Russian / Ukrainian
     "мужчина", "парень", "мальчик", "чоловік", "хлопець",
     # European
-    "hombre", "masculino", "chico", "varon", "varón",   # ES
-    "homem", "masculino", "rapaz",                      # PT
-    "homme", "masculin", "garçon",                      # FR
-    "mann", "männlich", "junge",                        # DE
-    "uomo", "maschio", "ragazzo",                       # IT
-    "mezczyzna", "mężczyzna", "chlopak", "chłopak",     # PL (+ascii)
-    "muž", "chlapec",                                   # CS/SK
-    "andras", "άνδρας", "arseniko", "αρσενικό", "agori", "αγόρι",  # EL
+    "hombre", "masculino", "chico", "varon", "varón",
+    "homem", "masculino", "rapaz",
+    "homme", "masculin", "garçon",
+    "mann", "männlich", "junge",
+    "uomo", "maschio", "ragazzo",
+    "mezczyzna", "mężczyzna", "chlopak", "chłopak",
+    "muž", "chlapec",
+    "andras", "άνδρας", "arseniko", "αρσενικό", "agori", "αγόρι",
     # SE Asia more
-    "ຜູ້ຊາຍ",                    # Lao
-    "ប្រុស", "បុរស",             # Khmer
-    "ယောက်ျား", "အမျိုးသား",        # Burmese
+    "ຜູ້ຊາຍ",
+    "ប្រុស", "បុរស",
+    "ယောက်ျား", "အမျိုးသား",
 }
 
 # Female aliases
@@ -106,18 +115,18 @@ _FEMALE_ALIASES_RAW = {
     # Russian / Ukrainian
     "женщина", "девушка", "девочка", "жінка", "дівчина",
     # European
-    "mujer", "femenino", "chica",                # ES
-    "mulher", "feminina", "menina",              # PT
-    "femme", "féminin", "fille",                 # FR
-    "frau", "weiblich", "mädchen",               # DE
-    "donna", "femmina", "ragazza",               # IT
-    "kobieta", "dziewczyna", "zenska", "żeńska", # PL (+ascii)
-    "žena", "dívka",                              # CS/SK
-    "gynaika", "γυναίκα", "thyliko", "θηλυκό", "koritsi", "κορίτσι",  # EL
+    "mujer", "femenino", "chica",
+    "mulher", "feminina", "menina",
+    "femme", "féminin", "fille",
+    "frau", "weiblich", "mädchen",
+    "donna", "femmina", "ragazza",
+    "kobieta", "dziewczyna", "zenska", "żeńska",
+    "žena", "dívka",
+    "gynaika", "γυναίκα", "thyliko", "θηλυκό", "koritsi", "κορίτσι",
     # SE Asia more
-    "ຜູ້ຍິງ",                    # Lao
-    "ស្រី", "នារី",               # Khmer
-    "မိန်းမ", "အမျိုးသမီး",         # Burmese
+    "ຜູ້ຍິງ",
+    "ស្រី", "នារី",
+    "မိန်းမ", "အမျိုးသမီး",
 }
 
 # LGBT / non-binary / unspecified → map to LGBT role
@@ -164,32 +173,41 @@ def resolve_gender_role_id(text: str) -> int:
     return ROLE_LGBT
 
 def resolve_age_role_id(age_text: str) -> int | None:
+    """
+    จับคู่ช่วงอายุแบบรวบ (ไม่มี fallback):
+    - ถ้าช่วงที่ตรงกันมีการตั้ง Role ID (>0) จะคืนค่านั้น
+    - ถ้ายังไม่ได้ตั้ง (==0) จะคืน None เพื่อไม่ให้ยศอายุ
+    """
     try:
         age = int((age_text or "").strip())
     except ValueError:
         return None
-    if 0 <= age <= 10:
-        return ROLE_0_10
-    elif 10 < age <= 15:
-        return ROLE_10_15
-    elif 16 <= age <= 20:
-        return ROLE_16_20
-    elif 21 <= age <= 28:
-        return ROLE_21_28
-    elif 29 <= age <= 35:
-        return ROLE_29_35
-    elif age >= 36:
-        return ROLE_36_UP
+
+    slots = [
+        ((0, 12), ROLE_0_12),
+        ((13, 15), ROLE_13_15),
+        ((16, 17), ROLE_16_17),
+        ((18, 20), ROLE_18_20),
+        ((21, 24), ROLE_21_24),
+        ((25, 34), ROLE_25_34),
+        ((35, 44), ROLE_35_44),
+        ((45, 54), ROLE_45_54),
+        ((55, 64), ROLE_55_64),
+        ((65, 200), ROLE_65_UP),  # 65+
+    ]
+
+    for (lo, hi), rid in slots:
+        if lo <= age <= hi and rid > 0:
+            return rid
     return None
 
 # ====== Helpers ======
-async def build_avatar_attachment(user: discord.User) -> tuple[discord.File | None, str | None]:
+async def build_avatar_attachment(user: discord.User):
     """
     Download user's avatar and return as a Discord File attachment, preferring WEBP 512, falling back to PNG 512.
     Returns (file, filename) or (None, None) on failure.
     """
     try:
-        # Prefer webp (smaller) then png
         try:
             asset = user.display_avatar.with_format("webp").with_size(512)
             data = await asset.read()
@@ -221,9 +239,32 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
     return e
 
+def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
+    """
+    คืนค่านิคเนมรูปแบบ: <base> (<form_name>)
+    - ลบ (...) ท้ายชื่อเดิมถ้ามี เพื่อไม่ซ้ำซ้อน
+    - จำกัดความยาว 32 ตัวอักษรตามข้อกำหนด Discord
+    """
+    base = (member.nick or member.name or "").strip()
+    base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
+    real = (form_name or "").strip()
+
+    candidate = f"{base} ({real})".strip()
+    if len(candidate) <= 32:
+        return candidate
+
+    max_base = 32 - (len(real) + 3)
+    if max_base > 1:
+        candidate = f"{base[:max_base].rstrip()} ({real})"
+        if len(candidate) <= 32:
+            return candidate
+
+    return real[:32]
+
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
-    name = discord.ui.TextInput(label="Name / ชื่อ", required=True)
+    # เปลี่ยน label ตามที่ขอ: Nickname / ชื่อเล่น
+    name = discord.ui.TextInput(label="Nickname / ชื่อเล่น", required=True)
     age = discord.ui.TextInput(label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)", required=True)
     gender = discord.ui.TextInput(label="Gender / เพศ", required=True)
 
@@ -250,14 +291,14 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        if any(char.isdigit() for char in self.name.value) or any(c in INVALID_CHARS for c in self.name.value):
+        if any(ch.isdigit() for ch in self.name.value) or any(c in INVALID_CHARS for c in self.name.value):
             await interaction.followup.send(
-                "❌ Name should not contain numbers or symbols.\n❌ ชื่อห้ามมีตัวเลขหรือสัญลักษณ์",
+                "❌ Nickname should not contain numbers or symbols.\n❌ ชื่อเล่นห้ามมีตัวเลขหรือสัญลักษณ์",
                 ephemeral=True
             )
             return
 
-        if any(char.isdigit() for char in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
+        if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
                 "❌ Gender should not contain numbers or symbols.\n❌ เพศห้ามมีตัวเลขหรือสัญลักษณ์",
                 ephemeral=True
@@ -268,7 +309,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         embed.set_thumbnail(url="attachment://avatar_placeholder.png")  # จะถูกแก้เป็นชื่อจริงตอนแนบไฟล์
-        embed.add_field(name="Name / ชื่อ", value=self.name.value, inline=False)
+        embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
 
@@ -278,7 +319,12 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
         if channel:
-            view = ApproveRejectView(user=interaction.user, gender_text=self.gender.value, age_text=self.age.value)
+            view = ApproveRejectView(
+                user=interaction.user,
+                gender_text=self.gender.value,
+                age_text=self.age.value,
+                form_name=self.name.value,  # ส่งชื่อเล่นไปใช้ตอนอนุมัติ
+            )
 
             # --- แนบ avatar เป็นไฟล์เพื่อกันภาพหาย ---
             avatar_file, filename = await build_avatar_attachment(interaction.user)
@@ -318,11 +364,12 @@ class VerificationView(discord.ui.View):
 
 # ====== View: Approve or Reject ======
 class ApproveRejectView(discord.ui.View):
-    def __init__(self, user: discord.User, gender_text: str, age_text: str):
+    def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str):
         super().__init__(timeout=None)
         self.user = user
         self.gender_text = (gender_text or "").strip()
         self.age_text = (age_text or "").strip()
+        self.form_name = (form_name or "").strip()
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -359,6 +406,17 @@ class ApproveRejectView(discord.ui.View):
             except discord.HTTPException:
                 await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
                 return
+
+            # --- NEW: อัปเดตนิคเนมให้มี (ชื่อเล่น) ---
+            if APPEND_FORM_NAME_TO_NICK:
+                try:
+                    new_nick = build_parenthesized_nick(member, self.form_name)
+                    if new_nick and new_nick != (member.nick or member.name):
+                        await member.edit(nick=new_nick, reason="Verification: append form nickname")
+                except discord.Forbidden:
+                    pass
+                except discord.HTTPException:
+                    pass
 
             pending_verifications.discard(self.user.id)
 
@@ -459,10 +517,9 @@ async def userinfo(ctx, member: discord.Member):
     async for message in channel.history(limit=200):
         if message.author == bot.user and message.embeds and message.mentions:
             if member in message.mentions:
-                orig = message.embeds[0]
-                new_embed = copy_embed_fields(orig)
+                embed0 = message.embeds[0]
+                new_embed = copy_embed_fields(embed0)
 
-                # พยายามย้าย thumbnail มาเป็นไฟล์แนบในข้อความนี้
                 if message.attachments:
                     try:
                         att = message.attachments[0]
@@ -475,7 +532,6 @@ async def userinfo(ctx, member: discord.Member):
                     except Exception:
                         pass
 
-                # ถ้าไม่มีแนบในต้นฉบับ / อ่านไฟล์ไม่สำเร็จ -> ส่ง embed เดิม (อาจไม่มีรูป)
                 await ctx.send(embed=new_embed)
                 return
 

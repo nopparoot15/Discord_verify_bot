@@ -388,18 +388,28 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 age_text=self.age.value,
                 form_name=self.name.value,
             )
+        
+            # --- ใช้ thumbnail อย่างเดียว ไม่ให้รูปใหญ่เด้งขึ้นมา ---
             avatar_file, filename = await build_avatar_attachment(interaction.user)
             if avatar_file and filename:
-                embed.set_thumbnail(url=f"attachment://{filename}")
+                # 1) อัปโหลดชั่วคราวเพื่อเอา CDN URL แล้วลบโพสต์อัปโหลด
+                tmp_msg = await channel.send(file=avatar_file, silent=True)
+                cdn_url = tmp_msg.attachments[0].url if tmp_msg.attachments else interaction.user.display_avatar.url
+                try:
+                    await tmp_msg.delete()
+                except Exception:
+                    pass  # ลบไม่ได้ก็ข้ามไป (ไม่กระทบการส่ง embed)
+        
+                # 2) ใช้ URL เป็น thumbnail แล้วส่ง embed "ไม่แนบไฟล์"
+                embed.set_thumbnail(url=cdn_url)
                 await channel.send(
                     content=interaction.user.mention,
                     embed=embed,
                     view=view,
                     allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-                    file=avatar_file,
                 )
             else:
-                # fallback (อาจหายเมื่อผู้ใช้เปลี่ยนรูปในอนาคต)
+                # fallback กรณีโหลดไฟล์ไม่สำเร็จ
                 embed.set_thumbnail(url=interaction.user.display_avatar.url)
                 await channel.send(
                     content=interaction.user.mention,
@@ -408,10 +418,10 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
                 )
 
+
         await interaction.followup.send(
             "✅ Verification request submitted. Please wait for admin approval.\n"
-            "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน\n"
-            "ℹ️ ชื่อเล่นที่กรอกจะถูกนำไปตั้งเป็นชื่อในเซิร์ฟเวอร์หลังอนุมัติ",
+            "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน\n",
             ephemeral=True
         )
 

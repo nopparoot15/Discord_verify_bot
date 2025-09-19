@@ -243,7 +243,15 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     return e
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
-    base = (member.nick or member.name or "").strip()
+    base = (
+        member.nick
+        or getattr(member, "global_name", None)  
+        or member.display_name                     
+        or member.name                            
+        or ""
+    ).strip()
+
+    # ลบวงเล็บท้ายชื่อเดิมถ้ามี
     base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
     real = (form_name or "").strip()
 
@@ -251,12 +259,14 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     if len(candidate) <= 32:
         return candidate
 
-    max_base = 32 - (len(real) + 3)
+    # ตัด base ให้พอดี
+    max_base = 32 - (len(real) + 3)  # เว้นที่สำหรับ " (" + ")"
     if max_base > 1:
         candidate = f"{base[:max_base].rstrip()} ({real})"
         if len(candidate) <= 32:
             return candidate
 
+    # ถ้ายังเกิน ใช้ชื่อเล่นล้วน
     return real[:32]
 
 # ====== Modal ======
@@ -429,7 +439,8 @@ class ApproveRejectView(discord.ui.View):
             # --- ตั้งนิคเนม: <ชื่อเดิม> (ชื่อเล่น) ---
             nick_msg = ""
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                bot_me = interaction.guild.me
+                # กันกรณี guild.me เป็น None ในบางบริบท
+                bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
                     # เช็กสิทธิ์ก่อน
                     if not bot_me or not bot_me.guild_permissions.manage_nicknames:
@@ -437,16 +448,17 @@ class ApproveRejectView(discord.ui.View):
                     elif member.guild.owner_id == member.id:
                         nick_msg = "⚠️ เปลี่ยนชื่อเจ้าของเซิร์ฟเวอร์ไม่ได้"
                     elif bot_me.top_role <= member.top_role:
-                        nick_msg = "⚠️ ลำดับ role ของบอทต่ำกว่าสมาชิก เปลี่ยนชื่อไม่ได้"
+                        nick_msg = "⚠️ ลำดับ role ของบอทต่ำกว่าหรือเท่ากับสมาชิก เปลี่ยนชื่อไม่ได้"
                     else:
                         new_nick = build_parenthesized_nick(member, self.form_name)
-                        if new_nick and new_nick != (member.nick or member.name):
+                        current_nick = member.nick or ""  # เปรียบเทียบกับ "นิคเนมปัจจุบัน" เท่านั้น (ไม่ใช้ username)
+                        if new_nick and new_nick != current_nick:
                             await member.edit(nick=new_nick, reason="Verification: append form nickname")
                 except discord.Forbidden:
                     nick_msg = "⚠️ สิทธิ์ไม่พอในการตั้งชื่อ"
                 except discord.HTTPException:
                     nick_msg = "⚠️ ตั้งชื่อไม่สำเร็จ (HTTP error)"
-
+            
             pending_verifications.discard(self.user.id)
 
             # DM ผู้ใช้ (ignore errors)

@@ -30,7 +30,6 @@ ROLE_55_59  = 1418704067194261615
 ROLE_60_64  = 1418704072617496666
 ROLE_65_UP  = 1418704076119736390
 
-# Toggle: ให้บอทเติม (ชื่อเล่น) ต่อท้ายชื่อในดิสเวล่าอนุมัติ
 APPEND_FORM_NAME_TO_NICK = True
 
 # ====== DISCORD BOT SETUP ======
@@ -44,7 +43,6 @@ pending_verifications = set()
 
 INVALID_CHARS = set("=+*/@#$%^&*()<>?|{}[]\"'\\~`")
 
-# กันอีโมจิ/ตัวประกอบอีโมจิ (ZWJ/VS16/ธง ฯลฯ)
 EMOJI_RE = re.compile(
     r"["
     r"\U0001F300-\U0001F5FF"
@@ -64,7 +62,7 @@ EMOJI_RE = re.compile(
 def contains_emoji(s: str) -> bool:
     return bool(EMOJI_RE.search(s or ""))
 
-# ====== Gender Normalizer & Aliases (Multilingual) ======
+# ====== Gender Normalizer & Aliases ======
 def _norm_gender(s: str) -> str:
     s = (s or "").strip().lower()
     s = re.sub(r'[\s\.\-_\/\\]+', '', s)
@@ -102,7 +100,7 @@ _FEMALE_ALIASES_RAW = {
     "nữ", "phụ nữ", "con gái",
     "wanita", "perempuan", "cewek",
     "babae", "dalaga",
-    "महिला", "औरत", "ลड़की", "ladki", "aurat", "عورت", "خातون",
+    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "خातون",
     "أنثى", "امرأة", "بنت", "فتاة",
     "kadın", "bayan", "kız",
     "женщина", "девушка", "девочка", "жінка", "дівчина",
@@ -170,7 +168,6 @@ def resolve_age_role_id(age_text: str) -> int | None:
 
 # ====== Helpers ======
 async def build_avatar_attachment(user: discord.User):
-    """ยังคงเผื่อไว้ให้ userinfo ใช้ re-attach (ไม่ได้ใช้ใน on_submit แล้ว)"""
     try:
         try:
             asset = user.display_avatar.with_format("webp").with_size(512)
@@ -221,6 +218,47 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
             return candidate
     return real[:32]
 
+# ---------- NEW: helpers สำหรับคำสั่งรีเฟรชอายุ ----------
+AGE_ROLE_IDS_ALL = [rid for rid in [
+    ROLE_0_12, ROLE_13_15, ROLE_16_18, ROLE_19_21, ROLE_22_24,
+    ROLE_25_29, ROLE_30_34, ROLE_35_39, ROLE_40_44, ROLE_45_49,
+    ROLE_50_54, ROLE_55_59, ROLE_60_64, ROLE_65_UP
+] if rid and rid > 0]
+
+def _find_embed_field(embed: discord.Embed, *keys: str) -> str | None:
+    """หาค่า field ตามคีย์ (case-insensitive, partial)"""
+    keys = [k.lower() for k in keys]
+    for f in embed.fields:
+        name = (f.name or "").lower()
+        if any(k in name for k in keys):
+            return f.value
+    return None
+
+def _parse_sent_at(s: str) -> datetime | None:
+    """parse 'dd/mm/YYYY HH:MM' เป็นเวลาเขต +7"""
+    try:
+        dt = datetime.strptime(s.strip(), "%d/%m/%Y %H:%M")
+        return dt.replace(tzinfo=timezone(timedelta(hours=7)))
+    except Exception:
+        return None
+
+def _years_between(a: datetime, b: datetime) -> int:
+    years = b.year - a.year
+    if (b.month, b.day) < (a.month, a.day):
+        years -= 1
+    return max(years, 0)
+
+async def _latest_verification_embed_for(member: discord.Member) -> discord.Embed | None:
+    """ไล่ประวัติห้องอนุมัติ หา embed ล่าสุดที่ mention user นี้"""
+    channel = member.guild.get_channel(APPROVAL_CHANNEL_ID)
+    if not channel:
+        return None
+    async for msg in channel.history(limit=500):
+        if msg.author == bot.user and msg.embeds and member in msg.mentions:
+            return msg.embeds[0]
+    return None
+# --------------------------------------------------------
+
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
@@ -243,11 +281,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ป้องกัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        # กันส่งซ้ำ
         if interaction.user.id in pending_verifications:
             await interaction.followup.send(
                 "❗ You already submitted a verification request. Please wait for admin review.\n"
@@ -256,7 +292,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # ตรวจอายุ
         age_str = (self.age.value or "").strip()
         if not re.fullmatch(r"\d{1,3}", age_str):
             await interaction.followup.send(
@@ -266,7 +301,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # ตรวจชื่อเล่น
         nick = (self.name.value or "").strip()
         if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick):
             await interaction.followup.send(
@@ -280,7 +314,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             await interaction.followup.send("❌ ชื่อเล่นไม่ถูกต้อง: ห้ามใช้อีโมจิ", ephemeral=True)
             return
 
-        # ตรวจเพศ
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
                 "❌ Gender is invalid. Text only (e.g., Male / Female / LGBT).\n"
@@ -294,9 +327,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         pending_verifications.add(interaction.user.id)
 
-        # === ส่งคำขอไปห้องอนุมัติ (ใช้รูปเล็กแบบ URL CDN เท่านั้น) ===
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
-        # ใช้ PNG คงที่และขนาดเล็ก เพื่อลดโอกาส preview ใหญ่ และลิงก์คงอยู่แม้ผู้ใช้เปลี่ยนรูป
         thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
         embed.set_thumbnail(url=thumb_url)
 
@@ -316,7 +347,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 age_text=self.age.value,
                 form_name=self.name.value,
             )
-            # ส่งเฉพาะ embed + view (ไม่แนบไฟล์) => จะไม่มีรูปใหญ่บนหัวข้อความ
             await channel.send(
                 content=interaction.user.mention,
                 embed=embed,
@@ -330,7 +360,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             ephemeral=True
         )
 
-# ====== View: Button to open Modal ======
+# ====== Views (Approve/Reject) ======
 class VerificationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -339,7 +369,6 @@ class VerificationView(discord.ui.View):
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VerificationForm())
 
-# ====== View: Approve or Reject ======
 class ApproveRejectView(discord.ui.View):
     def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str):
         super().__init__(timeout=None)
@@ -415,7 +444,6 @@ class ApproveRejectView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
-        # อัปเดตปุ่ม + footer
         for child in self.children:
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ Approved / อนุมัติแล้ว"
@@ -426,17 +454,16 @@ class ApproveRejectView(discord.ui.View):
 
         try:
             msg = interaction.message
-            if msg:
-                if msg.embeds:
-                    e = msg.embeds[0]
-                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
-                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-                    orig = e.footer.text or ""
-                    footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
-                    e.set_footer(text=footer)
-                    await msg.edit(embed=e, view=self)
-                else:
-                    await msg.edit(view=self)
+            if msg and msg.embeds:
+                e = msg.embeds[0]
+                actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                orig = e.footer.text or ""
+                footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
+                e.set_footer(text=footer)
+                await msg.edit(embed=e, view=self)
+            else:
+                await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
 
@@ -464,17 +491,16 @@ class ApproveRejectView(discord.ui.View):
 
         try:
             msg = interaction.message
-            if msg:
-                if msg.embeds:
-                    e = msg.embeds[0]
-                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
-                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-                    orig = e.footer.text or ""
-                    footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
-                    e.set_footer(text=footer)
-                    await msg.edit(embed=e, view=self)
-                else:
-                    await msg.edit(view=self)
+            if msg and msg.embeds:
+                e = msg.embeds[0]
+                actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                orig = e.footer.text or ""
+                footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
+                e.set_footer(text=footer)
+                await msg.edit(embed=e, view=self)
+            else:
+                await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
 
@@ -495,7 +521,7 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
 
-# ====== Admin command to resend embed ======
+# ====== Admin commands ======
 @bot.command(name="verify_embed")
 @commands.has_permissions(administrator=True)
 async def verify_embed(ctx):
@@ -509,10 +535,6 @@ async def verify_embed(ctx):
 @bot.command(name="userinfo")
 @commands.has_permissions(administrator=True)
 async def userinfo(ctx, member: discord.Member):
-    """
-    ดึงคำขอยืนยันล่าสุดของ user จากห้อง APPROVAL
-    - ถ้าโพสต์ต้นฉบับมีไฟล์ avatar แนบอยู่ จะดึงไฟล์นั้นมา re-attach ใหม่ (กรณีนี้ปกติจะไม่มีไฟล์แนบแล้ว)
-    """
     channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
@@ -540,6 +562,65 @@ async def userinfo(ctx, member: discord.Member):
                 return
 
     await ctx.send("❌ No verification info found for this user.")
+
+# ---------- NEW: refresh age command ----------
+@bot.command(name="refresh_age")
+@commands.has_permissions(administrator=True)
+async def refresh_age(ctx, member: discord.Member):
+    """
+    รีเฟรชยศอายุตาม Age / อายุ + 📅 Sent at ใน embed ล่าสุดของผู้ใช้คนนั้น
+    วิธีใช้: $refresh_age @user
+    """
+    embed = await _latest_verification_embed_for(member)
+    if not embed:
+        await ctx.send("❌ ไม่พบข้อมูลคำขอยืนยันล่าสุดของผู้ใช้นี้ในห้องอนุมัติ")
+        return
+
+    age_text = _find_embed_field(embed, "age", "อายุ")
+    sent_text = _find_embed_field(embed, "sent at")
+    if not age_text or not sent_text:
+        await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
+        return
+
+    try:
+        old_age = int(str(age_text).strip())
+    except ValueError:
+        await ctx.send("❌ รูปแบบอายุเดิมใน embed ไม่ใช่ตัวเลข")
+        return
+
+    sent_dt = _parse_sent_at(sent_text)
+    if not sent_dt:
+        await ctx.send("❌ รูปแบบเวลา 'Sent at' ไม่ถูกต้อง (ต้องเป็น dd/mm/YYYY HH:MM)")
+        return
+
+    now = datetime.now(timezone(timedelta(hours=7)))
+    added_years = _years_between(sent_dt, now)
+    new_age = max(old_age + added_years, 0)
+
+    # หา role ใหม่จากอายุปัจจุบัน
+    new_age_role_id = resolve_age_role_id(str(new_age))
+    new_age_role = ctx.guild.get_role(new_age_role_id) if new_age_role_id else None
+
+    # หายศอายุเดิมทั้งหมดออกก่อน
+    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL]
+    if to_remove:
+        try:
+            await member.remove_roles(*to_remove, reason=f"Refresh age → now {new_age}")
+        except discord.Forbidden:
+            await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
+            return
+
+    # ใส่ยศใหม่ (ถ้ามีการแมป)
+    if new_age_role:
+        try:
+            await member.add_roles(new_age_role, reason=f"Refresh age → now {new_age}")
+        except discord.Forbidden:
+            await ctx.send(f"⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: {new_age_role.name}")
+            return
+
+    # สรุปผล
+    got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
+    await ctx.send(f"✅ อัปเดตอายุเป็น **{new_age}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
 
 # ====== Run bot ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))

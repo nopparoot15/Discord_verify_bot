@@ -294,7 +294,7 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
         label="Nickname / ชื่อเล่น",
-        placeholder="ชื่อเล่นจริง (จะตั้งเป็นชื่อในเซิร์ฟเวอร์) • 2–32 ตัว",
+        placeholder="ชื่อเล่น (จะตั้งเป็นชื่อในเซิร์ฟเวอร์) • 2–32 ตัว",
         style=discord.TextStyle.short,
         min_length=2, max_length=32, required=True
     )

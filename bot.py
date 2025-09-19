@@ -392,11 +392,11 @@ class ApproveRejectView(discord.ui.View):
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 1) ACK กัน timeout
+        # ACK กัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        # 2) หา member
+        # หา member
         member = interaction.guild.get_member(self.user.id)
         if not member:
             try:
@@ -411,7 +411,7 @@ class ApproveRejectView(discord.ui.View):
         age_role_id = resolve_age_role_id(self.age_text)
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
-        # 3) ให้ roles ทีเดียว
+        # ใส่ roles ทีเดียว
         if member and general_role and gender_role:
             roles_to_add = [general_role, gender_role]
             if age_role:
@@ -426,16 +426,26 @@ class ApproveRejectView(discord.ui.View):
                 await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
                 return
 
-            # --- NEW: อัปเดตนิคเนมให้มี (ชื่อเล่น) ---
-            if APPEND_FORM_NAME_TO_NICK:
+            # --- ตั้งนิคเนม: <ชื่อเดิม> (ชื่อเล่น) ---
+            nick_msg = ""
+            if APPEND_FORM_NAME_TO_NICK and self.form_name:
+                bot_me = interaction.guild.me
                 try:
-                    new_nick = build_parenthesized_nick(member, self.form_name)
-                    if new_nick and new_nick != (member.nick or member.name):
-                        await member.edit(nick=new_nick, reason="Verification: append form nickname")
+                    # เช็กสิทธิ์ก่อน
+                    if not bot_me or not bot_me.guild_permissions.manage_nicknames:
+                        nick_msg = "⚠️ บอทไม่มีสิทธิ์ Manage Nicknames"
+                    elif member.guild.owner_id == member.id:
+                        nick_msg = "⚠️ เปลี่ยนชื่อเจ้าของเซิร์ฟเวอร์ไม่ได้"
+                    elif bot_me.top_role <= member.top_role:
+                        nick_msg = "⚠️ ลำดับ role ของบอทต่ำกว่าสมาชิก เปลี่ยนชื่อไม่ได้"
+                    else:
+                        new_nick = build_parenthesized_nick(member, self.form_name)
+                        if new_nick and new_nick != (member.nick or member.name):
+                            await member.edit(nick=new_nick, reason="Verification: append form nickname")
                 except discord.Forbidden:
-                    pass
+                    nick_msg = "⚠️ สิทธิ์ไม่พอในการตั้งชื่อ"
                 except discord.HTTPException:
-                    pass
+                    nick_msg = "⚠️ ตั้งชื่อไม่สำเร็จ (HTTP error)"
 
             pending_verifications.discard(self.user.id)
 
@@ -448,17 +458,19 @@ class ApproveRejectView(discord.ui.View):
             except Exception:
                 pass
 
-            await interaction.followup.send("✅ Approved and roles assigned.", ephemeral=True)
+            # สรุปผลให้แอดมินเห็น
+            base_ok = "✅ Approved and roles assigned."
+            extra = f"\n{nick_msg}" if nick_msg else ""
+            await interaction.followup.send(base_ok + extra, ephemeral=True)
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
-        # 4) ปิดปุ่ม และแก้ label
+        # ปิดปุ่ม
         for child in self.children:
             child.disabled = True
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
 
-        # 5) อัปเดต view
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
@@ -470,7 +482,6 @@ class ApproveRejectView(discord.ui.View):
             await interaction.response.defer(ephemeral=True)
 
         pending_verifications.discard(self.user.id)
-
         try:
             await self.user.send(
                 "❌ Your verification was rejected. Please contact admin.\n"
@@ -485,7 +496,6 @@ class ApproveRejectView(discord.ui.View):
             child.disabled = True
             if getattr(child, "custom_id", None) == "reject_button":
                 child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
-
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:

@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import asyncio
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
@@ -8,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 # ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
+ASSET_CHANNEL_ID = 0  # ใส่ไอดีห้องเก็บไฟล์ส่วนตัวสำหรับอัปโหลดรูป (0 = ปิด ใช้วิธีอัปโหลดชั่วคราว)
 
 ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
@@ -46,99 +48,69 @@ INVALID_CHARS = set("=+*/@#$%^&*()<>?|{}[]\"'\\~`")
 
 # กันอีโมจิ/ตัวประกอบอีโมจิ (ZWJ/VS16/ธง ฯลฯ)
 EMOJI_RE = re.compile(
-    r"["                      # กลุ่มอักขระอีโมจิหลัก
-    r"\U0001F300-\U0001F5FF" # Misc Symbols & Pictographs
-    r"\U0001F600-\U0001F64F" # Emoticons
-    r"\U0001F680-\U0001F6FF" # Transport & Map
-    r"\U0001F700-\U0001F77F" # Alchemical
-    r"\U0001F780-\U0001F7FF" # Geometric Ext.
-    r"\U0001F900-\U0001F9FF" # Supplemental Symbols & Pictographs
-    r"\U0001FA00-\U0001FA6F" # Symbols for games
-    r"\U0001FA70-\U0001FAFF" # Symbols & Pictographs Ext-A
-    r"\u2600-\u26FF"         # Misc Symbols
-    r"\u2700-\u27BF"         # Dingbats
+    r"["
+    r"\U0001F300-\U0001F5FF"
+    r"\U0001F600-\U0001F64F"
+    r"\U0001F680-\U0001F6FF"
+    r"\U0001F700-\U0001F77F"
+    r"\U0001F780-\U0001F7FF"
+    r"\U0001F900-\U0001F9FF"
+    r"\U0001FA00-\U0001FA6F"
+    r"\U0001FA70-\U0001FAFF"
+    r"\u2600-\u26FF"
+    r"\u2700-\u27BF"
     r"]"
-    r"|[\u200d\uFE0F]"       # ZWJ & VS16
-    r"|[\U0001F1E6-\U0001F1FF]{2}"  # ธงประเทศ (Regional Indicators)
+    r"|[\u200d\uFE0F]"
+    r"|[\U0001F1E6-\U0001F1FF]{2}"
 )
 def contains_emoji(s: str) -> bool:
     return bool(EMOJI_RE.search(s or ""))
 
 # ====== Gender Normalizer & Aliases (Multilingual) ======
 def _norm_gender(s: str) -> str:
-    """Lowercase + strip + remove common separators to make matching forgiving."""
     s = (s or "").strip().lower()
     s = re.sub(r'[\s\.\-_\/\\]+', '', s)
     return s
 
 # Male aliases
 _MALE_ALIASES_RAW = {
-    # Thai
     "ช", "ชา", "ชาย", "ผู้ชาย", "เพศชาย", "ผช", "ชายแท้", "หนุ่ม",
-    # English
     "male", "man", "boy", "m", "masculine", "he", "him",
-    # Chinese
     "男", "男性", "男生", "男人",
-    # Japanese
     "男", "男性", "おとこ", "だんせい",
-    # Korean
     "남", "남자", "남성",
-    # Vietnamese
     "nam", "đàn ông", "dan ong", "con trai", "nam giới", "namgioi",
-    # Indonesian / Malay
     "pria", "laki", "laki-laki", "lelaki", "cowok",
-    # Filipino
     "lalaki",
-    # Hindi / Urdu
     "पुरुष", "aadmi", "ladka", "पुरूष", "mard", "आदमी", "مرد",
-    # Arabic
     "ذكر", "رجل", "صبي",
-    # Turkish
     "erkek", "bay",
-    # Russian / Ukrainian
     "мужчина", "парень", "мальчик", "чоловік", "хлопець",
-    # European
     "hombre", "masculino", "chico", "varon", "varón",
-    "homem", "masculino", "rapaz",
+    "homem", "rapaz",
     "homme", "masculin", "garçon",
     "mann", "männlich", "junge",
     "uomo", "maschio", "ragazzo",
     "mezczyzna", "mężczyzna", "chlopak", "chłopak",
     "muž", "chlapec",
     "andras", "άνδρας", "arseniko", "αρσενικό", "agori", "αγόρι",
-    # SE Asia more
-    "ຜູ້ຊາຍ",
-    "ប្រុស", "បុរស",
-    "ယောက်ျား", "အမျိုးသား",
+    "ຜູ້ຊາຍ", "ប្រុស", "បុរស", "ယောက်ျား", "အမျိုးသား",
 }
 
 # Female aliases
 _FEMALE_ALIASES_RAW = {
-    # Thai
     "ห", "หญ", "หญิ", "หญิง", "ผู้หญิง", "เพศหญิง", "ผญ", "สาว", "ญ",
-    # English
     "female", "woman", "girl", "f", "feminine", "she", "her",
-    # Chinese
     "女", "女性", "女生", "女人",
-    # Japanese
     "女", "女性", "おんな", "じょせい",
-    # Korean
     "여", "여자", "여성",
-    # Vietnamese
     "nữ", "phụ nữ", "con gái",
-    # Indonesian / Malay
     "wanita", "perempuan", "cewek",
-    # Filipino
     "babae", "dalaga",
-    # Hindi / Urdu
-    "महिला", "औरत", "ลड़की", "ladki", "aurat", "عورت", "خातون",
-    # Arabic
+    "महिला", "औरत", "ลड़की", "ladki", "aurat", "عورت", "خاتون",
     "أنثى", "امرأة", "بنت", "فتاة",
-    # Turkish
     "kadın", "bayan", "kız",
-    # Russian / Ukrainian
     "женщина", "девушка", "девочка", "жінка", "дівчина",
-    # European
     "mujer", "femenino", "chica",
     "mulher", "feminina", "menina",
     "femme", "féminin", "fille",
@@ -147,25 +119,18 @@ _FEMALE_ALIASES_RAW = {
     "kobieta", "dziewczyna", "zenska", "żeńska",
     "žena", "dívka",
     "gynaika", "γυναίκα", "thyliko", "θηλυκό", "koritsi", "κορίτσι",
-    # SE Asia more
-    "ຜູ້ຍິງ",
-    "ស្រី", "នារី",
-    "မိန်းမ", "အမျိုးသမီး",
+    "ຜູ້ຍິງ", "ស្រី", "នារី", "မိန်းမ", "အမျိုးသမီး",
 }
 
 # LGBT / non-binary / unspecified → map to LGBT role
 _LGBT_ALIASES_RAW = {
-    # English & common
     "lgbt", "lgbtq", "lgbtq+", "nonbinary", "non-binary", "nb", "enby",
     "trans", "transgender", "genderqueer", "bigender", "agender", "genderfluid",
     "queer", "other", "prefernottosay", "unspecified", "none",
-    # Thai
     "เพศทางเลือก", "ไม่ระบุ", "อื่นๆ", "ไม่บอก", "ไบ", "ทอม", "ดี้", "สาวสอง", "สาวประเภทสอง",
-    # Chinese / JP / KR (selected)
     "非二元", "跨性别", "酷儿", "双性恋",
     "ノンバイナリー", "xジェンダー", "トランス", "クィア", "同性愛", "両性愛",
     "논바이너리", "트랜스", "퀴어", "양성애", "동성애",
-    # Others
     "androgynous", "pangender", "demiboy", "demigirl",
 }
 
@@ -173,17 +138,8 @@ MALE_ALIASES   = {_norm_gender(x) for x in _MALE_ALIASES_RAW}
 FEMALE_ALIASES = {_norm_gender(x) for x in _FEMALE_ALIASES_RAW}
 LGBT_ALIASES   = {_norm_gender(x) for x in _LGBT_ALIASES_RAW}
 
-# Accept prefixes (short-hand startswith)
-MALE_PREFIXES = {_norm_gender(x) for x in [
-    "ช", "ชา", "ชาย", "ผู้ช", "เพศช",
-    "m", "ma", "masc", "man",
-    "男", "おとこ", "だん", "남",
-]}
-FEMALE_PREFIXES = {_norm_gender(x) for x in [
-    "ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห",
-    "f", "fe", "fem", "woman", "wo",
-    "女", "おんな", "じょ", "여",
-]}
+MALE_PREFIXES = {_norm_gender(x) for x in ["ช", "ชา", "ชาย", "ผู้ช", "เพศช", "m", "ma", "masc", "man", "男", "おとこ", "だん", "남"]}
+FEMALE_PREFIXES = {_norm_gender(x) for x in ["ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห", "f", "fe", "fem", "woman", "wo", "女", "おんな", "じょ", "여"]}
 
 def resolve_gender_role_id(text: str) -> int:
     t = _norm_gender(text)
@@ -193,7 +149,6 @@ def resolve_gender_role_id(text: str) -> int:
         return ROLE_FEMALE
     if t in LGBT_ALIASES:
         return ROLE_LGBT
-    # Fallback: keep inclusive by default
     return ROLE_LGBT
 
 def resolve_age_role_id(age_text: str) -> int | None:
@@ -224,10 +179,6 @@ def resolve_age_role_id(age_text: str) -> int | None:
 
 # ====== Helpers ======
 async def build_avatar_attachment(user: discord.User):
-    """
-    Download user's avatar and return as a Discord File attachment, preferring WEBP 512, falling back to PNG 512.
-    Returns (file, filename) or (None, None) on failure.
-    """
     try:
         try:
             asset = user.display_avatar.with_format("webp").with_size(512)
@@ -242,8 +193,35 @@ async def build_avatar_attachment(user: discord.User):
     except Exception:
         return None, None
 
+async def get_avatar_cdn_url(guild: discord.Guild, user: discord.User) -> str:
+    """
+    คืน CDN URL สำหรับใช้เป็น thumbnail:
+    - ถ้ามี ASSET_CHANNEL_ID: อัปโหลดไปห้องนั้นแล้วใช้ลิงก์
+    - ถ้าไม่มี: อัปโหลดชั่วคราวที่ห้อง APPROVAL, รอ CDN แล้วลบโพสต์
+    """
+    f, _ = await build_avatar_attachment(user)
+    if not f:
+        return user.display_avatar.with_static_format("png").with_size(256).url
+
+    # 1) ใช้ห้อง assets ถ้ามี
+    if ASSET_CHANNEL_ID:
+        ch = guild.get_channel(ASSET_CHANNEL_ID)
+        if ch:
+            m = await ch.send(file=f, silent=True)
+            return m.attachments[0].url
+
+    # 2) อัปโหลดชั่วคราวในห้องอนุมัติ แล้วรอให้ CDN พร้อมก่อนลบ
+    ch2 = guild.get_channel(APPROVAL_CHANNEL_ID)
+    tmp = await ch2.send(file=f, silent=True)
+    url = tmp.attachments[0].url
+    await asyncio.sleep(1.5)  # กัน CDN ยังไม่พร้อม
+    try:
+        await tmp.delete()
+    except Exception:
+        pass
+    return url
+
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
-    """Create a shallow copy of important visual bits of an embed (title, desc, color, fields, image)."""
     e = discord.Embed(
         title=src.title or discord.Embed.Empty,
         description=src.description or discord.Embed.Empty,
@@ -260,15 +238,9 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     return e
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
-    """
-    สร้างนิคเนมรูปแบบ: <ฐานชื่อ> (<ชื่อเล่นจากฟอร์ม>)
-    - ใช้ฐานชื่อ: nick -> global_name -> display_name -> username
-    - ลบ (...) ท้ายชื่อเดิมถ้ามี
-    - จำกัด 32 ตัวอักษร
-    """
     base = (
         member.nick
-        or getattr(member, "global_name", None)  # global display name
+        or getattr(member, "global_name", None)
         or member.display_name
         or member.name
         or ""
@@ -280,14 +252,11 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     if len(candidate) <= 32:
         return candidate
 
-    # ตัด base ให้พอดี
-    max_base = 32 - (len(real) + 3)  # เว้น " (" + ")"
+    max_base = 32 - (len(real) + 3)
     if max_base > 1:
         candidate = f"{base[:max_base].rstrip()} ({real})"
         if len(candidate) <= 32:
             return candidate
-
-    # ถ้ายังเกิน ใช้ชื่อเล่นล้วน
     return real[:32]
 
 # ====== Modal ======
@@ -312,11 +281,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ป้องกัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        # กันส่งซ้ำ
         if interaction.user.id in pending_verifications:
             await interaction.followup.send(
                 "❗ You already submitted a verification request. Please wait for admin review.\n"
@@ -325,7 +292,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # ตรวจอายุ: ตัวเลข 1–3 หลัก
         age_str = (self.age.value or "").strip()
         if not re.fullmatch(r"\d{1,3}", age_str):
             await interaction.followup.send(
@@ -335,7 +301,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # ตรวจชื่อเล่น: 2–32 ตัวอักษร ห้ามตัวเลข/สัญลักษณ์ และห้ามอีโมจิ
         nick = (self.name.value or "").strip()
         if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick):
             await interaction.followup.send(
@@ -346,13 +311,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
         if contains_emoji(nick):
-            await interaction.followup.send(
-                "❌ ชื่อเล่นไม่ถูกต้อง: ห้ามใช้อีโมจิ",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ ชื่อเล่นไม่ถูกต้อง: ห้ามใช้อีโมจิ", ephemeral=True)
             return
 
-        # ตรวจเพศ: ไม่ให้มีตัวเลข/สัญลักษณ์ และห้ามอีโมจิ
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
                 "❌ Gender is invalid. Text only (e.g., Male / Female / LGBT).\n"
@@ -361,15 +322,11 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
         if contains_emoji(self.gender.value):
-            await interaction.followup.send(
-                "❌ เพศไม่ถูกต้อง: ห้ามใช้อีโมจิ (พิมพ์ ชาย / หญิง / LGBT)",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ เพศไม่ถูกต้อง: ห้ามใช้อีโมจิ (พิมพ์ ชาย / หญิง / LGBT)", ephemeral=True)
             return
 
         pending_verifications.add(interaction.user.id)
 
-        # === ส่งคำขอไปห้องอนุมัติ ===
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         embed.set_thumbnail(url="attachment://avatar_placeholder.png")
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
@@ -388,36 +345,17 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 age_text=self.age.value,
                 form_name=self.name.value,
             )
-        
-            # --- ใช้ thumbnail อย่างเดียว ไม่ให้รูปใหญ่เด้งขึ้นมา ---
-            avatar_file, filename = await build_avatar_attachment(interaction.user)
-            if avatar_file and filename:
-                # 1) อัปโหลดชั่วคราวเพื่อเอา CDN URL แล้วลบโพสต์อัปโหลด
-                tmp_msg = await channel.send(file=avatar_file, silent=True)
-                cdn_url = tmp_msg.attachments[0].url if tmp_msg.attachments else interaction.user.display_avatar.url
-                try:
-                    await tmp_msg.delete()
-                except Exception:
-                    pass  # ลบไม่ได้ก็ข้ามไป (ไม่กระทบการส่ง embed)
-        
-                # 2) ใช้ URL เป็น thumbnail แล้วส่ง embed "ไม่แนบไฟล์"
-                embed.set_thumbnail(url=cdn_url)
-                await channel.send(
-                    content=interaction.user.mention,
-                    embed=embed,
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-                )
-            else:
-                # fallback กรณีโหลดไฟล์ไม่สำเร็จ
-                embed.set_thumbnail(url=interaction.user.display_avatar.url)
-                await channel.send(
-                    content=interaction.user.mention,
-                    embed=embed,
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-                )
 
+            # --- ใช้ CDN URL สำหรับ thumbnail (ไม่แนบไฟล์ในโพสต์จริง) ---
+            cdn_url = await get_avatar_cdn_url(interaction.guild, interaction.user)
+            embed.set_thumbnail(url=cdn_url)
+
+            await channel.send(
+                content=interaction.user.mention,
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+            )
 
         await interaction.followup.send(
             "✅ Verification request submitted. Please wait for admin approval.\n"
@@ -447,8 +385,7 @@ class ApproveRejectView(discord.ui.View):
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.response.is_done():
             await interaction.response.defer()
-    
-        # หา member
+
         member = interaction.guild.get_member(self.user.id)
         if not member:
             try:
@@ -456,13 +393,13 @@ class ApproveRejectView(discord.ui.View):
             except Exception:
                 await interaction.followup.send("❌ Member not found in guild.", ephemeral=True)
                 return
-    
+
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
         gender_role_id = resolve_gender_role_id(self.gender_text)
         gender_role = interaction.guild.get_role(gender_role_id)
         age_role_id = resolve_age_role_id(self.age_text)
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
-    
+
         if member and general_role and gender_role:
             roles_to_add = [general_role, gender_role]
             if age_role:
@@ -475,8 +412,7 @@ class ApproveRejectView(discord.ui.View):
             except discord.HTTPException:
                 await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
                 return
-    
-            # ตั้งนิคเนม: <ฐานชื่อ> (ชื่อเล่น)
+
             nick_msg = ""
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
@@ -496,10 +432,9 @@ class ApproveRejectView(discord.ui.View):
                     nick_msg = "⚠️ สิทธิ์ไม่พอในการตั้งชื่อ"
                 except discord.HTTPException:
                     nick_msg = "⚠️ ตั้งชื่อไม่สำเร็จ (HTTP error)"
-    
+
             pending_verifications.discard(self.user.id)
-    
-            # DM ผู้ใช้ (ไม่ต้องแจ้ง room)
+
             try:
                 await self.user.send(
                     "✅ Your verification has been approved!\n"
@@ -507,22 +442,21 @@ class ApproveRejectView(discord.ui.View):
                 )
             except Exception:
                 pass
-    
-            # แจ้งเฉพาะกรณีมีคำเตือนตั้งชื่อ
+
             if nick_msg:
                 await interaction.followup.send(nick_msg, ephemeral=True)
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
-    
+
         # === อัปเดตปุ่มและ footer ===
         for child in self.children:
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ Approved / อนุมัติแล้ว"
                 child.style = discord.ButtonStyle.success
             elif getattr(child, "custom_id", None) == "reject_button":
-                child.style = discord.ButtonStyle.secondary  # ปุ่มที่ไม่ได้กดเป็นสีเทา
+                child.style = discord.ButtonStyle.secondary
             child.disabled = True
-    
+
         try:
             msg = interaction.message
             if msg:
@@ -538,13 +472,12 @@ class ApproveRejectView(discord.ui.View):
                     await msg.edit(view=self)
         except discord.NotFound:
             pass
-    
-    
+
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.response.is_done():
             await interaction.response.defer()
-    
+
         pending_verifications.discard(self.user.id)
         try:
             await self.user.send(
@@ -553,16 +486,15 @@ class ApproveRejectView(discord.ui.View):
             )
         except Exception:
             await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
-    
-        # === อัปเดตปุ่มและ footer ===
+
         for child in self.children:
             if getattr(child, "custom_id", None) == "reject_button":
                 child.label = "❌ Rejected / ปฏิเสธแล้ว"
                 child.style = discord.ButtonStyle.danger
             elif getattr(child, "custom_id", None) == "approve_button":
-                child.style = discord.ButtonStyle.secondary  # ปุ่มที่ไม่ได้กดเป็นสีเทา
+                child.style = discord.ButtonStyle.secondary
             child.disabled = True
-    
+
         try:
             msg = interaction.message
             if msg:
@@ -579,8 +511,6 @@ class ApproveRejectView(discord.ui.View):
         except discord.NotFound:
             pass
 
-
-
 # ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):
     embed = discord.Embed(
@@ -596,7 +526,6 @@ async def send_verification_embed(channel: discord.TextChannel):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    # Register persistent Verify button
     bot.add_view(VerificationView())
 
 # ====== Admin command to resend embed ======
@@ -616,7 +545,6 @@ async def userinfo(ctx, member: discord.Member):
     """
     ดึงคำขอยืนยันล่าสุดของ user จากห้อง APPROVAL
     - ถ้าโพสต์ต้นฉบับมีไฟล์ avatar แนบอยู่ จะดึงไฟล์นั้นมา re-attach ใหม่
-      เพื่อให้ thumbnail แสดงผลได้ (attachment://...) ในข้อความนี้ด้วย
     """
     channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:

@@ -450,7 +450,7 @@ class ApproveRejectView(discord.ui.View):
                     actor = getattr(interaction.user, "display_name", None) or interaction.user.name
                     stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
                     orig = e.footer.text or ""
-                    footer = f"{orig} \n Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
+                    footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
                     e.set_footer(text=footer)
                     await msg.edit(embed=e, view=self)
                 else:
@@ -488,7 +488,7 @@ class ApproveRejectView(discord.ui.View):
                     actor = getattr(interaction.user, "display_name", None) or interaction.user.name
                     stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
                     orig = e.footer.text or ""
-                    footer = f"{orig} \n Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
+                    footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
                     e.set_footer(text=footer)
                     await msg.edit(embed=e, view=self)
                 else:

@@ -261,52 +261,70 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
 
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
-    # เปลี่ยน label ตามที่ขอ: Nickname / ชื่อเล่น
-    name = discord.ui.TextInput(label="Nickname / ชื่อเล่น", required=True)
-    age = discord.ui.TextInput(label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)", required=True)
-    gender = discord.ui.TextInput(label="Gender / เพศ", required=True)
+    # แจ้งผู้ใช้ตรงช่องด้วย placeholder + จำกัดความยาว (Discord กำหนดนิคเนมสูงสุด 32 ตัว)
+    name = discord.ui.TextInput(
+        label="Nickname / ชื่อเล่น",
+        placeholder="กรอกชื่อเล่นจริงที่จะถูกตั้งเป็นชื่อในเซิร์ฟเวอร์ • 2–32 ตัวอักษร • ห้ามตัวเลข/สัญลักษณ์/อีโมจิ",
+        min_length=2, max_length=32, required=True
+    )
+    age = discord.ui.TextInput(
+        label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)",
+        placeholder="กรอกอายุเป็นตัวเลข 1–3 หลัก เช่น 21 (บอทจะจัดยศอายุให้อัตโนมัติ)",
+        min_length=1, max_length=3, required=True
+    )
+    gender = discord.ui.TextInput(
+        label="Gender / เพศ",
+        placeholder="พิมพ์ ชาย / หญิง หรือ LGBT (รองรับคำย่อหลายภาษา)",
+        required=True
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ACK ทันที กัน timeout
+        # ACK กัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        # เช็คซ้ำ
+        # กันส่งซ้ำ
         if interaction.user.id in pending_verifications:
             await interaction.followup.send(
-                "❗ You already submitted a verification request. Please wait for admin review.\n"
-                "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
+                "❗ คุณส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
                 ephemeral=True
             )
             return
 
+        # ตรวจอายุเป็นตัวเลขล้วน 1–3 หลัก
         age_str = (self.age.value or "").strip()
         if not re.fullmatch(r"\d{1,3}", age_str):
             await interaction.followup.send(
-                "❌ Please enter a valid number for age (1–3 digits, no symbols or letters).\n"
-                "❌ กรุณากรอกอายุเป็นตัวเลขล้วน ไม่เกิน 3 หลัก และห้ามมีสัญลักษณ์หรือตัวอักษร เช่น + / a ข",
+                "❌ กรุณากรอกอายุเป็นตัวเลข 1–3 หลัก (ห้ามมีสัญลักษณ์/ตัวอักษร)\n"
+                "ℹ️ อายุที่กรอกจะถูกใช้จัดยศอายุอัตโนมัติ",
                 ephemeral=True
             )
             return
 
-        if any(ch.isdigit() for ch in self.name.value) or any(c in INVALID_CHARS for c in self.name.value):
+        # ตรวจชื่อเล่น: ห้ามตัวเลข/สัญลักษณ์ และยาว 2–32 ตัว
+        nick = (self.name.value or "").strip()
+        if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick):
             await interaction.followup.send(
-                "❌ Nickname should not contain numbers or symbols.\n❌ ชื่อเล่นห้ามมีตัวเลขหรือสัญลักษณ์",
+                "❌ Nickname / ชื่อเล่น ไม่ถูกต้อง\n"
+                "• ชื่อนี้จะถูกตั้งเป็นชื่อของคุณในเซิร์ฟเวอร์\n"
+                "• ต้องยาว 2–32 ตัวอักษร และห้ามมีตัวเลข/สัญลักษณ์/อีโมจิ",
                 ephemeral=True
             )
             return
 
+        # ตรวจเพศ: ไม่ให้มีตัวเลข/สัญลักษณ์
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
-                "❌ Gender should not contain numbers or symbols.\n❌ เพศห้ามมีตัวเลขหรือสัญลักษณ์",
+                "❌ เพศห้ามมีตัวเลขหรือสัญลักษณ์ (พิมพ์ ชาย / หญิง หรือ LGBT)",
                 ephemeral=True
             )
             return
 
         pending_verifications.add(interaction.user.id)
 
+        # สร้าง embed + แนบ avatar เป็นไฟล์ (กันหาย)
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
-        embed.set_thumbnail(url="attachment://avatar_placeholder.png")  # จะถูกแก้เป็นชื่อจริงตอนแนบไฟล์
+        embed.set_thumbnail(url="attachment://avatar_placeholder.png")
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
@@ -321,10 +339,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 user=interaction.user,
                 gender_text=self.gender.value,
                 age_text=self.age.value,
-                form_name=self.name.value,  # ส่งชื่อเล่นไปใช้ตอนอนุมัติ
+                form_name=self.name.value,
             )
 
-            # --- แนบ avatar เป็นไฟล์เพื่อกันภาพหาย ---
             avatar_file, filename = await build_avatar_attachment(interaction.user)
             if avatar_file and filename:
                 embed.set_thumbnail(url=f"attachment://{filename}")
@@ -336,7 +353,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     file=avatar_file,
                 )
             else:
-                # fallback (อาจหายเมื่อเปลี่ยนรูป)
                 embed.set_thumbnail(url=interaction.user.display_avatar.url)
                 await channel.send(
                     content=interaction.user.mention,
@@ -346,8 +362,8 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 )
 
         await interaction.followup.send(
-            "✅ Your verification request has been submitted. Please wait for admin approval.\n"
-            "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน",
+            "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน\n"
+            "ℹ️ หมายเหตุ: ชื่อเล่นที่กรอกจะถูกนำไปตั้งเป็นชื่อในเซิร์ฟเวอร์",
             ephemeral=True
         )
 

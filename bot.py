@@ -438,6 +438,7 @@ class ApproveRejectView(discord.ui.View):
         if not interaction.response.is_done():
             await interaction.response.defer()
     
+        # หา member
         member = interaction.guild.get_member(self.user.id)
         if not member:
             try:
@@ -465,6 +466,7 @@ class ApproveRejectView(discord.ui.View):
                 await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
                 return
     
+            # ตั้งนิคเนม: <ฐานชื่อ> (ชื่อเล่น)
             nick_msg = ""
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
@@ -487,6 +489,7 @@ class ApproveRejectView(discord.ui.View):
     
             pending_verifications.discard(self.user.id)
     
+            # DM ผู้ใช้ (ไม่ต้องแจ้ง room)
             try:
                 await self.user.send(
                     "✅ Your verification has been approved!\n"
@@ -495,21 +498,34 @@ class ApproveRejectView(discord.ui.View):
             except Exception:
                 pass
     
+            # แจ้งเฉพาะกรณีมีคำเตือนตั้งชื่อ
             if nick_msg:
                 await interaction.followup.send(nick_msg, ephemeral=True)
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
     
-        # === อัปเดตปุ่ม: ปุ่มที่กดคงสีเดิม, อีกปุ่มเป็นเทา และปิดทั้งหมด ===
+        # === อัปเดตปุ่มและ footer ===
         for child in self.children:
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ Approved / อนุมัติแล้ว"
                 child.style = discord.ButtonStyle.success
             elif getattr(child, "custom_id", None) == "reject_button":
-                child.style = discord.ButtonStyle.secondary  # ทำเป็นสีเทา
+                child.style = discord.ButtonStyle.secondary  # ปุ่มที่ไม่ได้กดเป็นสีเทา
             child.disabled = True
+    
         try:
-            await interaction.message.edit(view=self)
+            msg = interaction.message
+            if msg:
+                if msg.embeds:
+                    e = msg.embeds[0]
+                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                    orig = e.footer.text or ""
+                    footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
+                    e.set_footer(text=footer)
+                    await msg.edit(embed=e, view=self)
+                else:
+                    await msg.edit(view=self)
         except discord.NotFound:
             pass
     
@@ -528,18 +544,31 @@ class ApproveRejectView(discord.ui.View):
         except Exception:
             await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
     
-        # === อัปเดตปุ่ม: ปุ่มที่กดคงสีแดง, อีกปุ่มเป็นเทา และปิดทั้งหมด ===
+        # === อัปเดตปุ่มและ footer ===
         for child in self.children:
             if getattr(child, "custom_id", None) == "reject_button":
                 child.label = "❌ Rejected / ปฏิเสธแล้ว"
                 child.style = discord.ButtonStyle.danger
             elif getattr(child, "custom_id", None) == "approve_button":
-                child.style = discord.ButtonStyle.secondary  # ทำเป็นสีเทา
+                child.style = discord.ButtonStyle.secondary  # ปุ่มที่ไม่ได้กดเป็นสีเทา
             child.disabled = True
+    
         try:
-            await interaction.message.edit(view=self)
+            msg = interaction.message
+            if msg:
+                if msg.embeds:
+                    e = msg.embeds[0]
+                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                    orig = e.footer.text or ""
+                    footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
+                    e.set_footer(text=footer)
+                    await msg.edit(embed=e, view=self)
+                else:
+                    await msg.edit(view=self)
         except discord.NotFound:
             pass
+
 
 
 # ====== Embed Sender ======

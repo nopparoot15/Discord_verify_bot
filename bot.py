@@ -14,7 +14,7 @@ ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
 
-# --- Consolidated age roles (ใส่ ID เอง; ถ้า =0 จะไม่ให้ยศอายุ / ไม่มี fallback) ---
+# --- Age roles (ใส่ ID แล้วตามที่ให้มา) ---
 ROLE_0_12   = 1402907371696558131
 ROLE_13_15  = 1344232758129594379
 ROLE_16_18  = 1344232891093090377
@@ -43,6 +43,26 @@ bot = commands.Bot(command_prefix="$", intents=intents)
 pending_verifications = set()
 
 INVALID_CHARS = set("=+*/@#$%^&*()<>?|{}[]\"'\\~`")
+
+# กันอีโมจิ/ตัวประกอบอีโมจิ (ZWJ/VS16/ธง ฯลฯ)
+EMOJI_RE = re.compile(
+    r"["                      # กลุ่มอักขระอีโมจิหลัก
+    r"\U0001F300-\U0001F5FF" # Misc Symbols & Pictographs
+    r"\U0001F600-\U0001F64F" # Emoticons
+    r"\U0001F680-\U0001F6FF" # Transport & Map
+    r"\U0001F700-\U0001F77F" # Alchemical
+    r"\U0001F780-\U0001F7FF" # Geometric Ext.
+    r"\U0001F900-\U0001F9FF" # Supplemental Symbols & Pictographs
+    r"\U0001FA00-\U0001FA6F" # Symbols for games
+    r"\U0001FA70-\U0001FAFF" # Symbols & Pictographs Ext-A
+    r"\u2600-\u26FF"         # Misc Symbols
+    r"\u2700-\u27BF"         # Dingbats
+    r"]"
+    r"|[\u200d\uFE0F]"       # ZWJ & VS16
+    r"|[\U0001F1E6-\U0001F1FF]{2}"  # ธงประเทศ (Regional Indicators)
+)
+def contains_emoji(s: str) -> bool:
+    return bool(EMOJI_RE.search(s or ""))
 
 # ====== Gender Normalizer & Aliases (Multilingual) ======
 def _norm_gender(s: str) -> str:
@@ -111,7 +131,7 @@ _FEMALE_ALIASES_RAW = {
     # Filipino
     "babae", "dalaga",
     # Hindi / Urdu
-    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "خاتون",
+    "महिला", "औरत", "ลड़की", "ladki", "aurat", "عورت", "خातون",
     # Arabic
     "أنثى", "امرأة", "بنت", "فتاة",
     # Turkish
@@ -181,7 +201,6 @@ def resolve_age_role_id(age_text: str) -> int | None:
         age = int((age_text or "").strip())
     except ValueError:
         return None
-
     slots = [
         ((0, 12), ROLE_0_12),
         ((13, 15), ROLE_13_15),
@@ -198,7 +217,6 @@ def resolve_age_role_id(age_text: str) -> int | None:
         ((60, 64), ROLE_60_64),
         ((65, 200), ROLE_65_UP),
     ]
-
     for (lo, hi), rid in slots:
         if lo <= age <= hi and rid > 0:
             return rid
@@ -219,7 +237,6 @@ async def build_avatar_attachment(user: discord.User):
             asset = user.display_avatar.with_static_format("png").with_size(512)
             data = await asset.read()
             filename = f"avatar_{user.id}.png"
-
         f = discord.File(io.BytesIO(data), filename=filename)
         return f, filename
     except Exception:
@@ -243,15 +260,19 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     return e
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
+    """
+    สร้างนิคเนมรูปแบบ: <ฐานชื่อ> (<ชื่อเล่นจากฟอร์ม>)
+    - ใช้ฐานชื่อ: nick -> global_name -> display_name -> username
+    - ลบ (...) ท้ายชื่อเดิมถ้ามี
+    - จำกัด 32 ตัวอักษร
+    """
     base = (
         member.nick
-        or getattr(member, "global_name", None)  
-        or member.display_name                     
-        or member.name                            
+        or getattr(member, "global_name", None)  # global display name
+        or member.display_name
+        or member.name
         or ""
     ).strip()
-
-    # ลบวงเล็บท้ายชื่อเดิมถ้ามี
     base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
     real = (form_name or "").strip()
 
@@ -260,7 +281,7 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
         return candidate
 
     # ตัด base ให้พอดี
-    max_base = 32 - (len(real) + 3)  # เว้นที่สำหรับ " (" + ")"
+    max_base = 32 - (len(real) + 3)  # เว้น " (" + ")"
     if max_base > 1:
         candidate = f"{base[:max_base].rstrip()} ({real})"
         if len(candidate) <= 32:
@@ -314,7 +335,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # ตรวจชื่อเล่น: 2–32 ตัวอักษร ห้ามตัวเลข/สัญลักษณ์
+        # ตรวจชื่อเล่น: 2–32 ตัวอักษร ห้ามตัวเลข/สัญลักษณ์ และห้ามอีโมจิ
         nick = (self.name.value or "").strip()
         if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick):
             await interaction.followup.send(
@@ -324,8 +345,14 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 ephemeral=True
             )
             return
+        if contains_emoji(nick):
+            await interaction.followup.send(
+                "❌ ชื่อเล่นไม่ถูกต้อง: ห้ามใช้อีโมจิ",
+                ephemeral=True
+            )
+            return
 
-        # ตรวจเพศ: ไม่ให้มีตัวเลข/สัญลักษณ์
+        # ตรวจเพศ: ไม่ให้มีตัวเลข/สัญลักษณ์ และห้ามอีโมจิ
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
                 "❌ Gender is invalid. Text only (e.g., Male / Female / LGBT).\n"
@@ -333,10 +360,16 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 ephemeral=True
             )
             return
+        if contains_emoji(self.gender.value):
+            await interaction.followup.send(
+                "❌ เพศไม่ถูกต้อง: ห้ามใช้อีโมจิ (พิมพ์ ชาย / หญิง / LGBT)",
+                ephemeral=True
+            )
+            return
 
         pending_verifications.add(interaction.user.id)
 
-        # === ส่งคำขอไปห้องอนุมัติ (เหมือนเดิมของคุณ) ===
+        # === ส่งคำขอไปห้องอนุมัติ ===
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         embed.set_thumbnail(url="attachment://avatar_placeholder.png")
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
@@ -366,6 +399,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     file=avatar_file,
                 )
             else:
+                # fallback (อาจหายเมื่อผู้ใช้เปลี่ยนรูปในอนาคต)
                 embed.set_thumbnail(url=interaction.user.display_avatar.url)
                 await channel.send(
                     content=interaction.user.mention,
@@ -380,7 +414,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             "ℹ️ TH: ชื่อเล่นที่กรอกจะถูกนำไปตั้งเป็นชื่อในเซิร์ฟเวอร์หลังอนุมัติ",
             ephemeral=True
         )
-
 
 # ====== View: Button to open Modal ======
 class VerificationView(discord.ui.View):
@@ -436,13 +469,11 @@ class ApproveRejectView(discord.ui.View):
                 await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
                 return
 
-            # --- ตั้งนิคเนม: <ชื่อเดิม> (ชื่อเล่น) ---
+            # --- ตั้งนิคเนม: <ฐานชื่อ> (ชื่อเล่น) ---
             nick_msg = ""
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                # กันกรณี guild.me เป็น None ในบางบริบท
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
-                    # เช็กสิทธิ์ก่อน
                     if not bot_me or not bot_me.guild_permissions.manage_nicknames:
                         nick_msg = "⚠️ บอทไม่มีสิทธิ์ Manage Nicknames"
                     elif member.guild.owner_id == member.id:
@@ -451,14 +482,14 @@ class ApproveRejectView(discord.ui.View):
                         nick_msg = "⚠️ ลำดับ role ของบอทต่ำกว่าหรือเท่ากับสมาชิก เปลี่ยนชื่อไม่ได้"
                     else:
                         new_nick = build_parenthesized_nick(member, self.form_name)
-                        current_nick = member.nick or ""  # เปรียบเทียบกับ "นิคเนมปัจจุบัน" เท่านั้น (ไม่ใช้ username)
+                        current_nick = member.nick or ""
                         if new_nick and new_nick != current_nick:
                             await member.edit(nick=new_nick, reason="Verification: append form nickname")
                 except discord.Forbidden:
                     nick_msg = "⚠️ สิทธิ์ไม่พอในการตั้งชื่อ"
                 except discord.HTTPException:
                     nick_msg = "⚠️ ตั้งชื่อไม่สำเร็จ (HTTP error)"
-            
+
             pending_verifications.discard(self.user.id)
 
             # DM ผู้ใช้ (ignore errors)
@@ -470,19 +501,15 @@ class ApproveRejectView(discord.ui.View):
             except Exception:
                 pass
 
-            # สรุปผลให้แอดมินเห็น
-            base_ok = "✅ Approved and roles assigned."
-            extra = f"\n{nick_msg}" if nick_msg else ""
-            await interaction.followup.send(base_ok + extra, ephemeral=True)
+            # ไม่ต้องส่งข้อความยืนยันซ้ำซ้อน; แจ้งเฉพาะกรณีมีคำเตือนนิคเนม
+            if nick_msg:
+                await interaction.followup.send(nick_msg, ephemeral=True)
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
-        # ปิดปุ่ม
+        # ปิดปุ่ม (ไม่เปลี่ยนข้อความบนปุ่ม)
         for child in self.children:
             child.disabled = True
-            if getattr(child, "custom_id", None) == "approve_button":
-                child.label = "✅ You approved this. / คุณอนุมัติคำขอนี้แล้ว"
-
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
@@ -502,16 +529,14 @@ class ApproveRejectView(discord.ui.View):
         except Exception:
             pass
 
-        await interaction.followup.send("❌ Rejected.", ephemeral=True)
-
+        # ไม่ส่งข้อความ 'Rejected.' ซ้ำซ้อน
         for child in self.children:
             child.disabled = True
-            if getattr(child, "custom_id", None) == "reject_button":
-                child.label = "❌ You rejected this. / คุณปฏิเสธคำขอนี้"
         try:
             await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
+
 
 # ====== Embed Sender ======
 async def send_verification_embed(channel: discord.TextChannel):

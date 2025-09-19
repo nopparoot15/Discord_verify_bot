@@ -512,35 +512,34 @@ class ApproveRejectView(discord.ui.View):
             await interaction.message.edit(view=self)
         except discord.NotFound:
             pass
-
-
-@discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
-async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-    if not interaction.response.is_done():
-        await interaction.response.defer()
-
-    pending_verifications.discard(self.user.id)
-    try:
-        await self.user.send(
-            "❌ Your verification was rejected. Please contact admin.\n"
-            "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
-        )
-    except Exception:
-        await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
-
-    # === อัปเดตปุ่ม: ปุ่มที่กดคงสีแดง, อีกปุ่มเป็นเทา และปิดทั้งหมด ===
-    for child in self.children:
-        if getattr(child, "custom_id", None) == "reject_button":
-            child.label = "❌ Rejected / ปฏิเสธแล้ว"
-            child.style = discord.ButtonStyle.danger
-        elif getattr(child, "custom_id", None) == "approve_button":
-            child.style = discord.ButtonStyle.secondary  # ทำเป็นสีเทา
-        child.disabled = True
-    try:
-        await interaction.message.edit(view=self)
-    except discord.NotFound:
-        pass
-
+    
+    
+    @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+    
+        pending_verifications.discard(self.user.id)
+        try:
+            await self.user.send(
+                "❌ Your verification was rejected. Please contact admin.\n"
+                "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
+            )
+        except Exception:
+            await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
+    
+        # === อัปเดตปุ่ม: ปุ่มที่กดคงสีแดง, อีกปุ่มเป็นเทา และปิดทั้งหมด ===
+        for child in self.children:
+            if getattr(child, "custom_id", None) == "reject_button":
+                child.label = "❌ Rejected / ปฏิเสธแล้ว"
+                child.style = discord.ButtonStyle.danger
+            elif getattr(child, "custom_id", None) == "approve_button":
+                child.style = discord.ButtonStyle.secondary  # ทำเป็นสีเทา
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except discord.NotFound:
+            pass
 
 
 # ====== Embed Sender ======

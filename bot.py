@@ -70,7 +70,6 @@ def _norm_gender(s: str) -> str:
     s = re.sub(r'[\s\.\-_\/\\]+', '', s)
     return s
 
-# Male aliases
 _MALE_ALIASES_RAW = {
     "ช", "ชา", "ชาย", "ผู้ชาย", "เพศชาย", "ผช", "ชายแท้", "หนุ่ม",
     "male", "man", "boy", "m", "masculine", "he", "him",
@@ -94,8 +93,6 @@ _MALE_ALIASES_RAW = {
     "andras", "άνδρας", "arseniko", "αρσενικό", "agori", "αγόρι",
     "ຜູ້ຊາຍ", "ប្រុស", "បុរស", "ယောက်ျား", "အမျိုးသား",
 }
-
-# Female aliases
 _FEMALE_ALIASES_RAW = {
     "ห", "หญ", "หญิ", "หญิง", "ผู้หญิง", "เพศหญิง", "ผญ", "สาว", "ญ",
     "female", "woman", "girl", "f", "feminine", "she", "her",
@@ -105,7 +102,7 @@ _FEMALE_ALIASES_RAW = {
     "nữ", "phụ nữ", "con gái",
     "wanita", "perempuan", "cewek",
     "babae", "dalaga",
-    "महिला", "औरत", "ลड़की", "ladki", "aurat", "عورت", "خاتون",
+    "महिला", "औरत", "ลड़की", "ladki", "aurat", "عورت", "خातون",
     "أنثى", "امرأة", "بنت", "فتاة",
     "kadın", "bayan", "kız",
     "женщина", "девушка", "девочка", "жінка", "дівчина",
@@ -119,8 +116,6 @@ _FEMALE_ALIASES_RAW = {
     "gynaika", "γυναίκα", "thyliko", "θηλυκό", "koritsi", "κορίτσι",
     "ຜູ້ຍິງ", "ស្រី", "នារី", "မိန်းမ", "အမျိုးသမီး",
 }
-
-# LGBT / non-binary / unspecified → map to LGBT role
 _LGBT_ALIASES_RAW = {
     "lgbt", "lgbtq", "lgbtq+", "nonbinary", "non-binary", "nb", "enby",
     "trans", "transgender", "genderqueer", "bigender", "agender", "genderfluid",
@@ -131,11 +126,9 @@ _LGBT_ALIASES_RAW = {
     "논바이너리", "트랜스", "퀴어", "양성애", "동성애",
     "androgynous", "pangender", "demiboy", "demigirl",
 }
-
 MALE_ALIASES   = {_norm_gender(x) for x in _MALE_ALIASES_RAW}
 FEMALE_ALIASES = {_norm_gender(x) for x in _FEMALE_ALIASES_RAW}
 LGBT_ALIASES   = {_norm_gender(x) for x in _LGBT_ALIASES_RAW}
-
 MALE_PREFIXES = {_norm_gender(x) for x in ["ช", "ชา", "ชาย", "ผู้ช", "เพศช", "m", "ma", "masc", "man", "男", "おとこ", "だん", "남"]}
 FEMALE_PREFIXES = {_norm_gender(x) for x in ["ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห", "f", "fe", "fem", "woman", "wo", "女", "おんな", "じょ", "여"]}
 
@@ -177,10 +170,7 @@ def resolve_age_role_id(age_text: str) -> int | None:
 
 # ====== Helpers ======
 async def build_avatar_attachment(user: discord.User):
-    """
-    ดาวน์โหลด avatar ปัจจุบันเป็นไฟล์เล็ก (WEBP/PNG 512) เพื่อแนบไปกับ embed
-    แล้วอ้างด้วย attachment://filename ให้โชว์เฉพาะ thumbnail
-    """
+    """ยังคงเผื่อไว้ให้ userinfo ใช้ re-attach (ไม่ได้ใช้ใน on_submit แล้ว)"""
     try:
         try:
             asset = user.display_avatar.with_format("webp").with_size(512)
@@ -221,11 +211,9 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     ).strip()
     base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
     real = (form_name or "").strip()
-
     candidate = f"{base} ({real})".strip()
     if len(candidate) <= 32:
         return candidate
-
     max_base = 32 - (len(real) + 3)
     if max_base > 1:
         candidate = f"{base[:max_base].rstrip()} ({real})"
@@ -255,9 +243,11 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # ป้องกัน timeout
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
+        # กันส่งซ้ำ
         if interaction.user.id in pending_verifications:
             await interaction.followup.send(
                 "❗ You already submitted a verification request. Please wait for admin review.\n"
@@ -266,6 +256,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
+        # ตรวจอายุ
         age_str = (self.age.value or "").strip()
         if not re.fullmatch(r"\d{1,3}", age_str):
             await interaction.followup.send(
@@ -275,6 +266,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
+        # ตรวจชื่อเล่น
         nick = (self.name.value or "").strip()
         if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick):
             await interaction.followup.send(
@@ -288,6 +280,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             await interaction.followup.send("❌ ชื่อเล่นไม่ถูกต้อง: ห้ามใช้อีโมจิ", ephemeral=True)
             return
 
+        # ตรวจเพศ
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
                 "❌ Gender is invalid. Text only (e.g., Male / Female / LGBT).\n"
@@ -301,9 +294,12 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         pending_verifications.add(interaction.user.id)
 
-        # === ส่งคำขอไปห้องอนุมัติ (แนบไฟล์กับ embed ใน "ข้อความเดียว") ===
+        # === ส่งคำขอไปห้องอนุมัติ (ใช้รูปเล็กแบบ URL CDN เท่านั้น) ===
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
-        embed.set_thumbnail(url="attachment://avatar_placeholder.png")
+        # ใช้ PNG คงที่และขนาดเล็ก เพื่อลดโอกาส preview ใหญ่ และลิงก์คงอยู่แม้ผู้ใช้เปลี่ยนรูป
+        thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
+        embed.set_thumbnail(url=thumb_url)
+
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
@@ -320,27 +316,13 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 age_text=self.age.value,
                 form_name=self.name.value,
             )
-
-            avatar_file, filename = await build_avatar_attachment(interaction.user)
-            if avatar_file and filename:
-                # แนบไฟล์ + ใช้ attachment:// ให้ขึ้นเฉพาะ thumbnail
-                embed.set_thumbnail(url=f"attachment://{filename}")
-                await channel.send(
-                    content=interaction.user.mention,
-                    embed=embed,
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-                    file=avatar_file,
-                )
-            else:
-                # fallback ใช้ลิงก์รูปโปรไฟล์ (กรณีโหลดไฟล์ไม่ได้)
-                embed.set_thumbnail(url=interaction.user.display_avatar.url)
-                await channel.send(
-                    content=interaction.user.mention,
-                    embed=embed,
-                    view=view,
-                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-                )
+            # ส่งเฉพาะ embed + view (ไม่แนบไฟล์) => จะไม่มีรูปใหญ่บนหัวข้อความ
+            await channel.send(
+                content=interaction.user.mention,
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+            )
 
         await interaction.followup.send(
             "✅ Verification request submitted. Please wait for admin approval.\n"
@@ -433,7 +415,7 @@ class ApproveRejectView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
-        # === อัปเดตปุ่มและ footer ===
+        # อัปเดตปุ่ม + footer
         for child in self.children:
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ Approved / อนุมัติแล้ว"
@@ -529,7 +511,7 @@ async def verify_embed(ctx):
 async def userinfo(ctx, member: discord.Member):
     """
     ดึงคำขอยืนยันล่าสุดของ user จากห้อง APPROVAL
-    - ถ้าโพสต์ต้นฉบับมีไฟล์ avatar แนบอยู่ จะดึงไฟล์นั้นมา re-attach ใหม่
+    - ถ้าโพสต์ต้นฉบับมีไฟล์ avatar แนบอยู่ จะดึงไฟล์นั้นมา re-attach ใหม่ (กรณีนี้ปกติจะไม่มีไฟล์แนบแล้ว)
     """
     channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:

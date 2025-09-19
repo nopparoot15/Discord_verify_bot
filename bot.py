@@ -1,7 +1,6 @@
 import os
 import re
 import io
-import asyncio
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
@@ -9,7 +8,6 @@ from datetime import datetime, timezone, timedelta
 # ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
-ASSET_CHANNEL_ID = 0  # ใส่ไอดีห้องเก็บไฟล์ส่วนตัวสำหรับอัปโหลดรูป (0 = ปิด ใช้วิธีอัปโหลดชั่วคราว)
 
 ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
@@ -179,6 +177,10 @@ def resolve_age_role_id(age_text: str) -> int | None:
 
 # ====== Helpers ======
 async def build_avatar_attachment(user: discord.User):
+    """
+    ดาวน์โหลด avatar ปัจจุบันเป็นไฟล์เล็ก (WEBP/PNG 512) เพื่อแนบไปกับ embed
+    แล้วอ้างด้วย attachment://filename ให้โชว์เฉพาะ thumbnail
+    """
     try:
         try:
             asset = user.display_avatar.with_format("webp").with_size(512)
@@ -192,34 +194,6 @@ async def build_avatar_attachment(user: discord.User):
         return f, filename
     except Exception:
         return None, None
-
-async def get_avatar_cdn_url(guild: discord.Guild, user: discord.User) -> str:
-    """
-    คืน CDN URL สำหรับใช้เป็น thumbnail:
-    - ถ้ามี ASSET_CHANNEL_ID: อัปโหลดไปห้องนั้นแล้วใช้ลิงก์
-    - ถ้าไม่มี: อัปโหลดชั่วคราวที่ห้อง APPROVAL, รอ CDN แล้วลบโพสต์
-    """
-    f, _ = await build_avatar_attachment(user)
-    if not f:
-        return user.display_avatar.with_static_format("png").with_size(256).url
-
-    # 1) ใช้ห้อง assets ถ้ามี
-    if ASSET_CHANNEL_ID:
-        ch = guild.get_channel(ASSET_CHANNEL_ID)
-        if ch:
-            m = await ch.send(file=f, silent=True)
-            return m.attachments[0].url
-
-    # 2) อัปโหลดชั่วคราวในห้องอนุมัติ แล้วรอให้ CDN พร้อมก่อนลบ
-    ch2 = guild.get_channel(APPROVAL_CHANNEL_ID)
-    tmp = await ch2.send(file=f, silent=True)
-    url = tmp.attachments[0].url
-    await asyncio.sleep(1.5)  # กัน CDN ยังไม่พร้อม
-    try:
-        await tmp.delete()
-    except Exception:
-        pass
-    return url
 
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     e = discord.Embed(
@@ -327,6 +301,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         pending_verifications.add(interaction.user.id)
 
+        # === ส่งคำขอไปห้องอนุมัติ (แนบไฟล์กับ embed ใน "ข้อความเดียว") ===
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         embed.set_thumbnail(url="attachment://avatar_placeholder.png")
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
@@ -346,16 +321,26 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 form_name=self.name.value,
             )
 
-            # --- ใช้ CDN URL สำหรับ thumbnail (ไม่แนบไฟล์ในโพสต์จริง) ---
-            cdn_url = await get_avatar_cdn_url(interaction.guild, interaction.user)
-            embed.set_thumbnail(url=cdn_url)
-
-            await channel.send(
-                content=interaction.user.mention,
-                embed=embed,
-                view=view,
-                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
-            )
+            avatar_file, filename = await build_avatar_attachment(interaction.user)
+            if avatar_file and filename:
+                # แนบไฟล์ + ใช้ attachment:// ให้ขึ้นเฉพาะ thumbnail
+                embed.set_thumbnail(url=f"attachment://{filename}")
+                await channel.send(
+                    content=interaction.user.mention,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+                    file=avatar_file,
+                )
+            else:
+                # fallback ใช้ลิงก์รูปโปรไฟล์ (กรณีโหลดไฟล์ไม่ได้)
+                embed.set_thumbnail(url=interaction.user.display_avatar.url)
+                await channel.send(
+                    content=interaction.user.mention,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+                )
 
         await interaction.followup.send(
             "✅ Verification request submitted. Please wait for admin approval.\n"
@@ -465,7 +450,7 @@ class ApproveRejectView(discord.ui.View):
                     actor = getattr(interaction.user, "display_name", None) or interaction.user.name
                     stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
                     orig = e.footer.text or ""
-                    footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
+                    footer = f"{orig} \n Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
                     e.set_footer(text=footer)
                     await msg.edit(embed=e, view=self)
                 else:
@@ -503,7 +488,7 @@ class ApproveRejectView(discord.ui.View):
                     actor = getattr(interaction.user, "display_name", None) or interaction.user.name
                     stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
                     orig = e.footer.text or ""
-                    footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
+                    footer = f"{orig} \n Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
                     e.set_footer(text=footer)
                     await msg.edit(embed=e, view=self)
                 else:

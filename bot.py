@@ -260,23 +260,22 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     return real[:32]
 
 # ====== Modal ======
-# ====== Modal (TH only, concise) ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
-        label="ชื่อเล่น",
-        placeholder="กรอกชื่อเล่นจริง (จะตั้งเป็นชื่อในเซิร์ฟเวอร์) • 2–32 ตัว • ห้ามตัวเลข/สัญลักษณ์",
+        label="Nickname / ชื่อเล่น",
+        placeholder="ชื่อเล่นจริง (จะตั้งเป็นชื่อในเซิร์ฟเวอร์) • 2–32 ตัว",
         style=discord.TextStyle.short,
         min_length=2, max_length=32, required=True
     )
     age = discord.ui.TextInput(
-        label="อายุ (ตัวเลขเท่านั้น)",
-        placeholder="ใส่ตัวเลข 1–3 หลัก เช่น 21",
+        label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)",
+        placeholder="เช่น 21 (ตัวเลข 1–3 หลัก)",
         style=discord.TextStyle.short,
         min_length=1, max_length=3, required=True
     )
     gender = discord.ui.TextInput(
-        label="เพศ",
-        placeholder="พิมพ์ ชาย / หญิง / LGBT",
+        label="Gender / เพศ",
+        placeholder="ชาย / หญิง / LGBT",
         style=discord.TextStyle.short,
         required=True
     )
@@ -289,7 +288,8 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         # กันส่งซ้ำ
         if interaction.user.id in pending_verifications:
             await interaction.followup.send(
-                "❗ คุณส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
+                "❗ You already submitted a verification request. Please wait for admin review.\n"
+                "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
                 ephemeral=True
             )
             return
@@ -298,7 +298,8 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         age_str = (self.age.value or "").strip()
         if not re.fullmatch(r"\d{1,3}", age_str):
             await interaction.followup.send(
-                "❌ อายุไม่ถูกต้อง: ใส่เป็นตัวเลข 1–3 หลักเท่านั้น",
+                "❌ Invalid age. Use numbers only (1–3 digits).\n"
+                "❌ อายุไม่ถูกต้อง กรุณาใส่เป็นตัวเลขล้วน 1–3 หลัก",
                 ephemeral=True
             )
             return
@@ -307,8 +308,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         nick = (self.name.value or "").strip()
         if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick):
             await interaction.followup.send(
-                "❌ ชื่อเล่นไม่ถูกต้อง: ชื่อนี้จะถูกตั้งเป็นชื่อในเซิร์ฟเวอร์ "
-                "ต้องเป็นตัวอักษร 2–32 ตัว และห้ามมีตัวเลข/สัญลักษณ์/อีโมจิ",
+                "❌ Nickname is invalid.\n"
+                "• EN: This nickname will be set as your server name. Letters only, 2–32 chars; no digits/symbols/emoji.\n"
+                "• TH: ชื่อเล่นนี้จะถูกตั้งเป็นชื่อในเซิร์ฟเวอร์ ต้องเป็นตัวอักษรล้วน 2–32 ตัว ห้ามตัวเลข/สัญลักษณ์/อีโมจิ",
                 ephemeral=True
             )
             return
@@ -316,14 +318,15 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         # ตรวจเพศ: ไม่ให้มีตัวเลข/สัญลักษณ์
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value):
             await interaction.followup.send(
-                "❌ เพศไม่ถูกต้อง: พิมพ์เป็นตัวอักษร (เช่น ชาย / หญิง / LGBT)",
+                "❌ Gender is invalid. Text only (e.g., Male / Female / LGBT).\n"
+                "❌ เพศไม่ถูกต้อง กรุณาพิมพ์เป็นตัวอักษรเท่านั้น (เช่น ชาย / หญิง / LGBT)",
                 ephemeral=True
             )
             return
 
         pending_verifications.add(interaction.user.id)
 
-        # สร้าง embed + แนบ avatar (เหมือนเดิม)
+        # === ส่งคำขอไปห้องอนุมัติ (เหมือนเดิมของคุณ) ===
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         embed.set_thumbnail(url="attachment://avatar_placeholder.png")
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
@@ -362,8 +365,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 )
 
         await interaction.followup.send(
-            "✅ ส่งคำยืนยันแล้ว กรุณารอแอดมินอนุมัติ\n"
-            "ℹ️ ชื่อเล่นที่กรอกจะถูกนำไปตั้งเป็นชื่อในเซิร์ฟเวอร์หลังอนุมัติ",
+            "✅ Verification request submitted. Please wait for admin approval.\n"
+            "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน\n"
+            "ℹ️ TH: ชื่อเล่นที่กรอกจะถูกนำไปตั้งเป็นชื่อในเซิร์ฟเวอร์หลังอนุมัติ",
             ephemeral=True
         )
 

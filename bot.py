@@ -89,7 +89,7 @@ _MALE_ALIASES_RAW = {
     "mezczyzna", "mężczyzna", "chlopak", "chłopak",
     "muž", "chlapec",
     "andras", "άνδρας", "arseniko", "αρσενικό", "agori", "αγόρι",
-    "ຜູ້ຊາຍ", "ប្រុស", "បុរស", "ယောက်ျား", "အမျိုးသား",
+    "ຜູ້ຊາຍ", "ប្រុស", "បុរស", "ယောက်ျား", "အများသား",
 }
 _FEMALE_ALIASES_RAW = {
     "ห", "หญ", "หญิ", "หญิง", "ผู้หญิง", "เพศหญิง", "ผญ", "สาว", "ญ",
@@ -127,7 +127,7 @@ _LGBT_ALIASES_RAW = {
 MALE_ALIASES   = {_norm_gender(x) for x in _MALE_ALIASES_RAW}
 FEMALE_ALIASES = {_norm_gender(x) for x in _FEMALE_ALIASES_RAW}
 LGBT_ALIASES   = {_norm_gender(x) for x in _LGBT_ALIASES_RAW}
-MALE_PREFIXES = {_norm_gender(x) for x in ["ช", "ชา", "ชาย", "ผู้ช", "เพศช", "m", "ma", "masc", "man", "男", "おとこ", "だん", "남"]}
+MALE_PREFIXES   = {_norm_gender(x) for x in ["ช", "ชา", "ชาย", "ผู้ช", "เพศช", "m", "ma", "masc", "man", "男", "おとこ", "だん", "남"]}
 FEMALE_PREFIXES = {_norm_gender(x) for x in ["ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห", "f", "fe", "fem", "woman", "wo", "女", "おんな", "じょ", "여"]}
 
 def resolve_gender_role_id(text: str) -> int:
@@ -218,7 +218,8 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
             return candidate
     return real[:32]
 
-# ---------- NEW: helpers สำหรับคำสั่งรีเฟรชอายุ ----------
+# ---------- NEW: Enforce single role per category ----------
+GENDER_ROLE_IDS_ALL = [ROLE_MALE, ROLE_FEMALE, ROLE_LGBT]
 AGE_ROLE_IDS_ALL = [rid for rid in [
     ROLE_0_12, ROLE_13_15, ROLE_16_18, ROLE_19_21, ROLE_22_24,
     ROLE_25_29, ROLE_30_34, ROLE_35_39, ROLE_40_44, ROLE_45_49,
@@ -226,7 +227,6 @@ AGE_ROLE_IDS_ALL = [rid for rid in [
 ] if rid and rid > 0]
 
 def _find_embed_field(embed: discord.Embed, *keys: str) -> str | None:
-    """หาค่า field ตามคีย์ (case-insensitive, partial)"""
     keys = [k.lower() for k in keys]
     for f in embed.fields:
         name = (f.name or "").lower()
@@ -235,7 +235,6 @@ def _find_embed_field(embed: discord.Embed, *keys: str) -> str | None:
     return None
 
 def _parse_sent_at(s: str) -> datetime | None:
-    """parse 'dd/mm/YYYY HH:MM' เป็นเวลาเขต +7"""
     try:
         dt = datetime.strptime(s.strip(), "%d/%m/%Y %H:%M")
         return dt.replace(tzinfo=timezone(timedelta(hours=7)))
@@ -249,7 +248,6 @@ def _years_between(a: datetime, b: datetime) -> int:
     return max(years, 0)
 
 async def _latest_verification_embed_for(member: discord.Member) -> discord.Embed | None:
-    """ไล่ประวัติห้องอนุมัติ หา embed ล่าสุดที่ mention user นี้"""
     channel = member.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         return None
@@ -257,7 +255,6 @@ async def _latest_verification_embed_for(member: discord.Member) -> discord.Embe
         if msg.author == bot.user and msg.embeds and member in msg.mentions:
             return msg.embeds[0]
     return None
-# --------------------------------------------------------
 
 # ====== Modal ======
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
@@ -391,24 +388,59 @@ class ApproveRejectView(discord.ui.View):
                 return
 
         general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
+
+        # --- Resolve new roles ---
         gender_role_id = resolve_gender_role_id(self.gender_text)
         gender_role = interaction.guild.get_role(gender_role_id)
         age_role_id = resolve_age_role_id(self.age_text)
         age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
         if member and general_role and gender_role:
-            roles_to_add = [general_role, gender_role]
-            if age_role:
-                roles_to_add.append(age_role)
+            # --- Enforce ONE gender role ---
             try:
-                await member.add_roles(*roles_to_add, reason="Verified")
+                to_remove_gender = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and (gender_role is None or r.id != gender_role.id)]
+                if to_remove_gender:
+                    await member.remove_roles(*to_remove_gender, reason="Verification: enforce single gender role")
             except discord.Forbidden:
-                await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
+                await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศเพศเดิมของสมาชิกคนนี้", ephemeral=True)
                 return
             except discord.HTTPException:
-                await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
+                await interaction.followup.send("⚠️ ถอดยศเพศเดิมไม่สำเร็จ (HTTP error)", ephemeral=True)
                 return
 
+            # --- Enforce ONE age role (only if new age role exists) ---
+            if age_role:
+                try:
+                    to_remove_age = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != age_role.id]
+                    if to_remove_age:
+                        await member.remove_roles(*to_remove_age, reason="Verification: enforce single age role")
+                except discord.Forbidden:
+                    await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศอายุเดิมของสมาชิกคนนี้", ephemeral=True)
+                    return
+                except discord.HTTPException:
+                    await interaction.followup.send("⚠️ ถอดยศอายุเดิมไม่สำเร็จ (HTTP error)", ephemeral=True)
+                    return
+
+            # --- Add roles (skip ones already present) ---
+            roles_to_add = []
+            if general_role and general_role not in member.roles:
+                roles_to_add.append(general_role)
+            if gender_role and gender_role not in member.roles:
+                roles_to_add.append(gender_role)
+            if age_role and age_role not in member.roles:
+                roles_to_add.append(age_role)
+
+            if roles_to_add:
+                try:
+                    await member.add_roles(*roles_to_add, reason="Verified")
+                except discord.Forbidden:
+                    await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
+                    return
+                except discord.HTTPException:
+                    await interaction.followup.send("⚠️ Failed to add roles due to HTTP error.", ephemeral=True)
+                    return
+
+            # ตั้งนิคเนม: <ฐานชื่อ> (ชื่อเล่น)
             nick_msg = ""
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
@@ -444,6 +476,7 @@ class ApproveRejectView(discord.ui.View):
         else:
             await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
 
+        # ปิดการกดซ้ำ + ทำสีปุ่ม
         for child in self.children:
             if getattr(child, "custom_id", None) == "approve_button":
                 child.label = "✅ Approved / อนุมัติแล้ว"
@@ -563,7 +596,7 @@ async def userinfo(ctx, member: discord.Member):
 
     await ctx.send("❌ No verification info found for this user.")
 
-# ---------- NEW: refresh age command ----------
+# ---------- Refresh age command ----------
 @bot.command(name="refresh_age")
 @commands.has_permissions(administrator=True)
 async def refresh_age(ctx, member: discord.Member):
@@ -597,11 +630,10 @@ async def refresh_age(ctx, member: discord.Member):
     added_years = _years_between(sent_dt, now)
     new_age = max(old_age + added_years, 0)
 
-    # หา role ใหม่จากอายุปัจจุบัน
     new_age_role_id = resolve_age_role_id(str(new_age))
     new_age_role = ctx.guild.get_role(new_age_role_id) if new_age_role_id else None
 
-    # หายศอายุเดิมทั้งหมดออกก่อน
+    # เอายศอายุเดิมออกก่อน (enforce single)
     to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL]
     if to_remove:
         try:
@@ -609,16 +641,20 @@ async def refresh_age(ctx, member: discord.Member):
         except discord.Forbidden:
             await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
             return
+        except discord.HTTPException:
+            await ctx.send("⚠️ ถอดยศอายุเดิมไม่สำเร็จ (HTTP error)")
+            return
 
-    # ใส่ยศใหม่ (ถ้ามีการแมป)
     if new_age_role:
         try:
             await member.add_roles(new_age_role, reason=f"Refresh age → now {new_age}")
         except discord.Forbidden:
             await ctx.send(f"⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: {new_age_role.name}")
             return
+        except discord.HTTPException:
+            await ctx.send("⚠️ เพิ่มยศอายุใหม่ไม่สำเร็จ (HTTP error)")
+            return
 
-    # สรุปผล
     got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
     await ctx.send(f"✅ อัปเดตอายุเป็น **{new_age}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
 

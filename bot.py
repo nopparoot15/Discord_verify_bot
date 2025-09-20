@@ -67,7 +67,7 @@ EMOJI_RE = re.compile(
 def contains_emoji(s: str) -> bool:
     return bool(EMOJI_RE.search(s or ""))
 
-# ====== Nickname canonicalizer (เข้ม) & same-name block ======
+# ====== Nickname canonicalizer & same-name block ======
 _ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
 _CONFUSABLES_MAP = str.maketrans({
     # Cyrillic -> Latin
@@ -112,7 +112,7 @@ def _base_display_name(member: discord.Member | discord.User) -> str:
         or getattr(member, "name", None)
         or ""
     ).strip()
-    return re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
+    return re.sub(r"\s*$begin:math:text$.*?$end:math:text$\s*$", "", base).strip()
 def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
     names = filter(None, {
         getattr(member, "nick", ""),
@@ -161,7 +161,7 @@ _FEMALE_ALIASES_RAW = {
     "nữ", "phụ nữ", "con gái",
     "wanita", "perempuan", "cewek",
     "babae", "dalaga",
-    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "خاتون",
+    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "ขاتون",
     "أنثى", "امرأة", "بنت", "فتاة",
     "kadın", "bayan", "kız",
     "женщина", "девушка", "девочка", "жінка", "дівчина",
@@ -223,7 +223,7 @@ def resolve_gender_role_id(text: str) -> int:
         return ROLE_GENDER_UNDISCLOSED
     if t in LGBT_ALIASES:
         return ROLE_LGBT
-    return ROLE_GENDER_UNDISCLOSED  # ค่าที่เหลือ/ว่าง → ไม่ระบุเพศ
+    return ROLE_GENDER_UNDISCLOSED  # ค่าอื่น/ว่าง → ไม่ระบุเพศ
 
 def resolve_age_role_id(age_text: str) -> int | None:
     if is_age_undisclosed(age_text):
@@ -293,7 +293,7 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
         or member.name
         or ""
     ).strip()
-    base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
+    base = re.sub(r"\s*$begin:math:text$.*?$end:math:text$\s*$", "", base).strip()
     real = (form_name or "").strip()
     candidate = f"{base} ({real})".strip()
     if len(candidate) <= 32:
@@ -396,7 +396,6 @@ async def _run_full_age_refresh(guild: discord.Guild):
             error_lines.append(f"❌ {member.mention}: Embed ขาด Age/Sent at")
             continue
 
-        # กรณีไม่ระบุอายุ
         if is_age_undisclosed(str(age_text)):
             new_role = guild.get_role(ROLE_AGE_UNDISCLOSED)
             to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
@@ -412,7 +411,6 @@ async def _run_full_age_refresh(guild: discord.Guild):
                 error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (HTTP)")
             continue
 
-        # เดิม: คำนวณอายุจากตัวเลข
         try:
             old_age = int(str(age_text).strip())
         except ValueError:
@@ -462,22 +460,22 @@ async def _run_full_age_refresh(guild: discord.Guild):
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
-        label="Nickname / ชื่อเล่น",
-        placeholder="ชื่อเล่น • 2–32 ตัว",
+        label="Nickname / ชื่อเล่น (เว้นว่างได้)",
+        placeholder="ชื่อเล่น • 2–32 ตัว (ปล่อยว่างถ้าไม่อยากระบุ)",
         style=discord.TextStyle.short,
-        min_length=2, max_length=32, required=True
+        min_length=0, max_length=32, required=False     # ← เปลี่ยน: เว้นว่างได้
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (ปล่อยว่าง = ไม่ระบุ)",
         placeholder='เช่น 21 หรือ "ไม่ระบุ" (ปล่อยว่างก็ได้)',
         style=discord.TextStyle.short,
-        min_length=0, max_length=16, required=False   # ว่างได้
+        min_length=0, max_length=16, required=False
     )
     gender = discord.ui.TextInput(
         label="Gender / เพศ (ปล่อยว่าง = ไม่ระบุ)",
         placeholder='เช่น ชาย / หญิง / LGBT (ปล่อยว่างก็ได้)',
         style=discord.TextStyle.short,
-        min_length=0, required=False                  # ว่างได้
+        min_length=0, required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -503,22 +501,23 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # --- Validate nickname ---
+        # --- Validate nickname (เฉพาะเมื่อกรอกมา) ---
         nick = (self.name.value or "").strip()
-        if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick) or contains_emoji(nick):
-            await interaction.followup.send(
-                "❌ Nickname invalid (letters only, 2–32; no digits/symbols/emoji).",
-                ephemeral=True
-            )
-            return
-        # กันกรณีชื่อเล่น = ชื่อดิสคอร์ด (แม้เปลี่ยนรูปแบบอักษร/เลข/อีโมจิ)
-        if _canon_full(nick) in _discord_names_set(interaction.user):
-            await interaction.followup.send(
-                "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
-                "   (เปลี่ยนพิมพ์เล็ก-ใหญ่ ใส่อักษรพิเศษ/อีโมจิ หรือใช้เลขแทนอักษร ไม่ถือว่าต่าง)",
-                ephemeral=True
-            )
-            return
+        if nick:
+            if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick) or contains_emoji(nick):
+                await interaction.followup.send(
+                    "❌ Nickname invalid (letters only, 2–32; no digits/symbols/emoji).",
+                    ephemeral=True
+                )
+                return
+            # กันกรณีชื่อเล่น = ชื่อดิสคอร์ด (แม้ดัดรูปแบบอักษร/เลข/อีโมจิ)
+            if _canon_full(nick) in _discord_names_set(interaction.user):
+                await interaction.followup.send(
+                    "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
+                    "   (เปลี่ยนพิมพ์เล็ก-ใหญ่ ใส่อักษรพิเศษ/อีโมจิ หรือใช้เลขแทนอักษร ไม่ถือว่าต่าง)",
+                    ephemeral=True
+                )
+                return
 
         # --- Validate gender (ถ้าไม่ว่างค่อยตรวจความสะอาด; ว่าง=ไม่ระบุ) ---
         gender_raw = (self.gender.value or "")
@@ -530,14 +529,15 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         pending_verifications.add(interaction.user.id)
 
-        # เตรียมค่าที่จะแสดงใน embed (เว้นว่าง = "ไม่ระบุ")
+        # เตรียมค่าที่จะแสดงใน embed
+        display_nick = (nick if nick else "ไม่ระบุ")
         display_age = (age_raw if age_raw else "ไม่ระบุ")
         display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
 
         embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
         thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
         embed.set_thumbnail(url=thumb_url)
-        embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
+        embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
         embed.add_field(name="Age / อายุ", value=display_age, inline=False)
         embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
 
@@ -549,9 +549,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         if channel:
             view = ApproveRejectView(
                 user=interaction.user,
-                gender_text=gender_raw,  # ว่างได้ → ไปแมปเป็น ไม่ระบุเพศ ตอน resolve
-                age_text=age_raw if age_raw else "ไม่ระบุ",  # ช่วยให้ฝั่ง refresh อ่านเจอ "ไม่ระบุ"
-                form_name=self.name.value,
+                gender_text=gender_raw,              # ว่างได้ → resolve เป็นไม่ระบุเพศ
+                age_text=age_raw if age_raw else "ไม่ระบุ",  # ให้ฝั่ง refresh เข้าใจว่าไม่ระบุ
+                form_name=nick,                      # ← ว่างได้: ฝั่งอนุมัติจะไม่แก้ชื่อ
             )
             await channel.send(
                 content=interaction.user.mention,
@@ -632,7 +632,7 @@ class ApproveRejectView(discord.ui.View):
                     await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
                     return
 
-            # วงเล็บชื่อเล่น
+            # วงเล็บชื่อเล่น: ทำเฉพาะเมื่อกรอกชื่อเล่นมาเท่านั้น
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
@@ -772,7 +772,6 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
         return
 
-    # ไม่ระบุอายุ
     if is_age_undisclosed(str(age_text)):
         new_age_role = ctx.guild.get_role(ROLE_AGE_UNDISCLOSED)
         to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
@@ -792,7 +791,6 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send(f"✅ ตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว (ผู้ใช้เลือกไม่ระบุอายุ)")
         return
 
-    # เดิม: คำนวณอายุจากตัวเลข
     try:
         old_age = int(str(age_text).strip())
     except ValueError:

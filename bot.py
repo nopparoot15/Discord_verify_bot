@@ -1,4 +1,4 @@
-import os
+pimport os
 import re
 import io
 import unicodedata
@@ -463,13 +463,13 @@ async def _run_full_age_refresh(guild: discord.Guild):
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
         label="Nickname / ชื่อเล่น",
-        placeholder="ชื่อเล่น • 2–32 ตัว",
+        placeholder="ชื่อเล่น 2–32 ตัว",
         style=discord.TextStyle.short,
         min_length=2, max_length=32, required=True
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (ใส่ตัวเลข หรือพิมพ์ 'ไม่ระบุ')",
-        placeholder='เช่น 21 หรือ "ไม่ระบุ" / "prefer not to say"',
+        placeholder='เช่น 21 หรือ "ไม่ระบุ"',
         style=discord.TextStyle.short,
         min_length=1, max_length=16, required=True
     )

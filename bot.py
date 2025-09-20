@@ -16,6 +16,7 @@ ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
+ROLE_GENDER_UNDISCLOSED = 1419046348023398421  # << ใหม่: เพศไม่ระบุ/ไม่อยากเปิดเผย
 
 # --- Age roles ---
 ROLE_0_12   = 1402907371696558131
@@ -32,7 +33,7 @@ ROLE_50_54  = 1418704062592843948
 ROLE_55_59  = 1418704067194261615
 ROLE_60_64  = 1418704072617496666
 ROLE_65_UP  = 1418704076119736390
-ROLE_AGE_UNDISCLOSED = 1419045340576747663  # << ใหม่: ไม่สะดวกกรอก/ไม่อยากเปิดเผย
+ROLE_AGE_UNDISCLOSED = 1419045340576747663  # ไม่สะดวกกรอก/ไม่อยากเปิดเผยอายุ
 
 APPEND_FORM_NAME_TO_NICK = True
 
@@ -174,35 +175,32 @@ _FEMALE_ALIASES_RAW = {
     "gynaika", "γυναίκα", "thyliko", "θηλυκό", "koritsi", "κορίτσι",
     "ຜູ້ຍິງ", "ស្រី", "នារី", "မိန်းမ", "အမျိုးသမီး",
 }
+# LGBT (เพศทางเลือก/อัตลักษณ์ทางเพศที่ไม่ใช่ชาย/หญิงแบบไบนารี)
 _LGBT_ALIASES_RAW = {
-    "lgbt", "lgbtq", "lgbtq+", "nonbinary", "non-binary", "nb", "enby",
-    "trans", "transgender", "genderqueer", "bigender", "agender", "genderfluid",
-    "queer", "other", "prefernottosay", "unspecified", "none",
-    "เพศทางเลือก", "ไม่ระบุ", "อื่นๆ", "ไม่บอก", "ไบ", "ทอม", "ดี้", "สาวสอง", "สาวประเภทสอง",
-    "非二元", "跨性别", "酷儿", "双性恋",
-    "ノンバイナリー", "xジェンダー", "トランス", "クィア", "同性愛", "両性愛",
-    "논바이너리", "트랜스", "퀴어", "양성애", "동성애",
-    "androgynous", "pangender", "demiboy", "demigirl",
+    "lgbt", "lgbtq", "lgbtq+",
+    "nonbinary", "non-binary", "nb", "enby",
+    "trans", "transgender",
+    "genderqueer", "bigender", "agender", "genderfluid",
+    "queer", "other",
+    "เพศทางเลือก", "สาวสอง", "สาวประเภทสอง", "ทอม", "ดี้", "ไบ",
+    "非二元", "跨性别", "酷儿",
+    "ノンバイナリー", "xジェンダー", "トランス", "クィア",
+    "논바이너리", "트랜스", "퀴어",
 }
-def _norm_simple(s: str) -> str:
-    return re.sub(r'[\s\.\-_\/\\]+', '', (s or '').strip().lower())
+# ใหม่: เพศไม่ระบุ/ไม่อยากเปิดเผย
+_GENDER_UNDISCLOSED_ALIASES_RAW = {
+    "ไม่ระบุ", "ไม่ระบุเพศ", "ไม่อยากเปิดเผย", "ไม่สะดวก", "ไม่สะดวกกรอก", "ไม่บอก",
+    "prefer not to say", "prefer-not-to-say", "undisclosed", "unspecified", "unknown", "private", "secret",
+    "n/a", "na", "none", "—", "-"
+}
 
 MALE_ALIASES   = {_norm_gender(x) for x in _MALE_ALIASES_RAW}
 FEMALE_ALIASES = {_norm_gender(x) for x in _FEMALE_ALIASES_RAW}
 LGBT_ALIASES   = {_norm_gender(x) for x in _LGBT_ALIASES_RAW}
+GENDER_UNDISCLOSED_ALIASES = {_norm_gender(x) for x in _GENDER_UNDISCLOSED_ALIASES_RAW}
+
 MALE_PREFIXES   = {_norm_gender(x) for x in ["ช", "ชา", "ชาย", "ผู้ช", "เพศช", "m", "ma", "masc", "man", "男", "おとこ", "だん", "남"]}
 FEMALE_PREFIXES = {_norm_gender(x) for x in ["ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห", "f", "fe", "fem", "woman", "wo", "女", "おんな", "じょ", "여"]}
-
-# ====== Age "ไม่ระบุ" aliases ======
-_AGE_UNDISCLOSED_ALIASES_RAW = {
-    "ไม่ระบุ","ไม่บอก","ไม่เปิดเผย","ไม่อยากเปิดเผย","ไม่สะดวกกรอก","ไม่สะดวก","ไม่ต้องการระบุ","ปกปิด",
-    "prefer not to say","prefer-not-to-say","undisclosed","unspecified","unknown","private","secret",
-    "n/a","na","none","x","-","—"
-}
-AGE_UNDISCLOSED_ALIASES = {_norm_simple(x) for x in _AGE_UNDISCLOSED_ALIASES_RAW}
-
-def is_age_undisclosed(text: str) -> bool:
-    return _norm_simple(text) in AGE_UNDISCLOSED_ALIASES
 
 def resolve_gender_role_id(text: str) -> int:
     t = _norm_gender(text)
@@ -210,12 +208,26 @@ def resolve_gender_role_id(text: str) -> int:
         return ROLE_MALE
     if t in FEMALE_ALIASES or any(t.startswith(p) for p in FEMALE_PREFIXES):
         return ROLE_FEMALE
+    if t in GENDER_UNDISCLOSED_ALIASES:
+        return ROLE_GENDER_UNDISCLOSED
     if t in LGBT_ALIASES:
         return ROLE_LGBT
-    return ROLE_LGBT
+    # ค่าไม่รู้จัก → ปลอดภัยสุดให้ "ไม่ระบุเพศ"
+    return ROLE_GENDER_UNDISCLOSED
+
+# ====== Age "ไม่ระบุ" ======
+def _norm_simple(s: str) -> str:
+    return re.sub(r'[\s\.\-_\/\\]+', '', (s or '').strip().lower())
+_AGE_UNDISCLOSED_ALIASES_RAW = {
+    "ไม่ระบุ","ไม่บอก","ไม่เปิดเผย","ไม่อยากเปิดเผย","ไม่สะดวกกรอก","ไม่สะดวก","ไม่ต้องการระบุ","ปกปิด",
+    "prefer not to say","prefer-not-to-say","undisclosed","unspecified","unknown","private","secret",
+    "n/a","na","none","x","-","—"
+}
+AGE_UNDISCLOSED_ALIASES = {_norm_simple(x) for x in _AGE_UNDISCLOSED_ALIASES_RAW}
+def is_age_undisclosed(text: str) -> bool:
+    return _norm_simple(text) in AGE_UNDISCLOSED_ALIASES
 
 def resolve_age_role_id(age_text: str) -> int | None:
-    # ใหม่: รองรับ "ไม่ระบุ"
     if is_age_undisclosed(age_text):
         return ROLE_AGE_UNDISCLOSED
     try:
@@ -296,11 +308,11 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     return real[:32]
 
 # ---------- Role sets ----------
-GENDER_ROLE_IDS_ALL = [ROLE_MALE, ROLE_FEMALE, ROLE_LGBT]
+GENDER_ROLE_IDS_ALL = [ROLE_MALE, ROLE_FEMALE, ROLE_LGBT, ROLE_GENDER_UNDISCLOSED]  # << เพิ่ม
 AGE_ROLE_IDS_ALL = [rid for rid in [
     ROLE_0_12, ROLE_13_15, ROLE_16_18, ROLE_19_21, ROLE_22_24,
     ROLE_25_29, ROLE_30_34, ROLE_35_39, ROLE_40_44, ROLE_45_49,
-    ROLE_50_54, ROLE_55_59, ROLE_60_64, ROLE_65_UP, ROLE_AGE_UNDISCLOSED  # << เพิ่ม
+    ROLE_50_54, ROLE_55_59, ROLE_60_64, ROLE_65_UP, ROLE_AGE_UNDISCLOSED
 ] if rid and rid > 0]
 
 # ---------- Utils for refresh ----------
@@ -335,10 +347,6 @@ async def _latest_verification_embed_for(member: discord.Member) -> discord.Embe
     return None
 
 async def _build_latest_verification_index(guild: discord.Guild, limit: int = 2000):
-    """
-    สแกนห้องอนุมัติแล้วคืน dict[user_id] = (embed, created_at)
-    ใช้ครั้งเดียวต่อรอบ จะเร็วกว่าการไล่หาแยกคน
-    """
     channel = guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         return {}
@@ -371,7 +379,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
     now = datetime.now(tz)
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if not log_ch:
-        return  # ไม่มีห้อง log ก็เงียบไว้
+        return
 
     index = await _build_latest_verification_index(guild)
     candidates = []
@@ -390,7 +398,6 @@ async def _run_full_age_refresh(guild: discord.Guild):
             error_lines.append(f"❌ {member.mention}: Embed ขาด Age/Sent at")
             continue
 
-        # ใหม่: กรณีไม่ระบุอายุ
         if is_age_undisclosed(str(age_text)):
             new_role = guild.get_role(ROLE_AGE_UNDISCLOSED)
             to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
@@ -406,7 +413,6 @@ async def _run_full_age_refresh(guild: discord.Guild):
                 error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (HTTP)")
             continue
 
-        # เดิม: ตัวเลขอายุ
         try:
             old_age = int(str(age_text).strip())
         except ValueError:
@@ -465,11 +471,11 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         label="Age / อายุ (ใส่ตัวเลข หรือพิมพ์ 'ไม่ระบุ')",
         placeholder='เช่น 21 หรือ "ไม่ระบุ" / "prefer not to say"',
         style=discord.TextStyle.short,
-        min_length=1, max_length=16, required=True   # เผื่อคำยาว
+        min_length=1, max_length=16, required=True
     )
     gender = discord.ui.TextInput(
-        label="Gender / เพศ",
-        placeholder="ชาย / หญิง / LGBT",
+        label="Gender / เพศ (ชาย/หญิง/LGBT หรือ 'ไม่ระบุ')",
+        placeholder="ชาย / หญิง / LGBT / ไม่ระบุ",
         style=discord.TextStyle.short,
         required=True
     )
@@ -487,7 +493,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             return
 
         age_str = (self.age.value or "").strip()
-        # ยอมรับตัวเลข หรือ keyword ไม่ระบุ
         if not (re.fullmatch(r"\d{1,3}", age_str) or is_age_undisclosed(age_str)):
             await interaction.followup.send(
                 "❌ รูปแบบอายุไม่ถูกต้อง\n"
@@ -515,6 +520,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
+        # เพศ: อนุญาตข้อความธรรมดา/ไม่ระบุ (ตัวเลข/อีโมจิ/สัญลักษณ์แปลกยังไม่ให้)
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value) or contains_emoji(self.gender.value):
             await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
             return
@@ -525,7 +531,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
         embed.set_thumbnail(url=thumb_url)
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
-        embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)  # เก็บข้อความตามที่กรอก (เลข/ไม่ระบุ)
+        embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
 
         now = datetime.now(timezone(timedelta(hours=7)))
@@ -619,7 +625,7 @@ class ApproveRejectView(discord.ui.View):
                     await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
                     return
 
-            # วงเล็บชื่อเล่นตามนโยบายเดิม (กรณี exact ถูกบล็อกตั้งแต่ตอนส่งแล้ว)
+            # วงเล็บชื่อเล่น
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
@@ -759,7 +765,6 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
         return
 
-    # เคส "ไม่ระบุ"
     if is_age_undisclosed(str(age_text)):
         new_age_role = ctx.guild.get_role(ROLE_AGE_UNDISCLOSED)
         to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
@@ -779,7 +784,6 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send(f"✅ ตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว (ผู้ใช้เลือกไม่ระบุอายุ)")
         return
 
-    # เดิม: ตัวเลขอายุ
     try:
         old_age = int(str(age_text).strip())
     except ValueError:
@@ -843,7 +847,6 @@ async def _monthly_age_refresh_daemon():
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone(tz)
 
-        # หา "วันที่ 1 เวลา 06:00" รอบถัดไป
         year = now_local.year
         month = now_local.month
         if now_local.day > 1 or (now_local.day == 1 and now_local.hour >= 6):

@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import unicodedata
 import asyncio
 import discord
 from discord.ext import commands
@@ -64,6 +65,120 @@ EMOJI_RE = re.compile(
 def contains_emoji(s: str) -> bool:
     return bool(EMOJI_RE.search(s or ""))
 
+# ====== Nickname canonicalizer (super strong) & name similarity policy ======
+# Policy switch: True=STRICT (บล็อกถ้าซ้ำ/ใกล้), False=SMART (อนุญาตแต่จะไม่ append และเตือนแอดมิน)
+REQUIRE_DIFFERENT_NICK = False  # แนะนำ False
+
+_ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
+
+# ตัวอักษรหน้าตาคล้าย (confusables) ชุดหลักที่เจอบ่อย (Cyrillic/Greek -> Latin lookalikes)
+_CONFUSABLES_MAP = str.maketrans({
+    # Cyrillic -> Latin
+    "А":"A","В":"B","Е":"E","К":"K","М":"M","Н":"H","О":"O","Р":"P","С":"S","Т":"T","У":"Y","Х":"X",
+    "а":"a","в":"b","е":"e","к":"k","м":"m","н":"h","о":"o","р":"p","с":"c","т":"t","у":"y","х":"x",
+    # Greek -> Latin
+    "Α":"A","Β":"B","Ε":"E","Ζ":"Z","Η":"H","Ι":"I","Κ":"K","Μ":"M","Ν":"N","Ο":"O","Ρ":"P","Τ":"T","Υ":"Y","Χ":"X",
+    "α":"a","β":"b","ε":"e","ι":"i","κ":"k","ν":"n","ο":"o","ρ":"p","τ":"t","υ":"y","χ":"x",
+})
+
+# leet speak map
+_LEET_MAP = str.maketrans({
+    "0":"o","1":"l","3":"e","4":"a","5":"s","7":"t","8":"b","9":"g","2":"z","6":"g",
+    "@":"a","$":"s","+":"t"
+})
+
+def _strip_combining(s: str) -> str:
+    # ลบเครื่องหมายกำกับเสียง/วรรณยุกต์ทุกภาษา (category Mn)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+
+def _letters_only(s: str) -> str:
+    # เก็บเฉพาะตัวอักษร (Unicode letters) ตัดทุกอย่างที่ไม่ใช่ตัวอักษร
+    return "".join(ch for ch in s if unicodedata.category(ch).startswith("L"))
+
+def _collapse_runs(s: str) -> str:
+    # ลดตัวซ้ำติดกันยาวๆ ให้เหลือตัวเดียว (aaa → a)
+    if not s:
+        return s
+    out = [s[0]]
+    for ch in s[1:]:
+        if ch != out[-1]:
+            out.append(ch)
+    return "".join(out)
+
+def _canon_full(s: str) -> str:
+    """
+    ทำชื่อให้เป็นรูปแบบเทียบที่ 'ยากจะหลบ':
+    - NFKC -> ลบ zero-width/emoji -> map confusables -> leet -> remove combining -> letters only -> casefold -> collapse runs
+    """
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s)
+    s = _ZERO_WIDTH_RE.sub("", s)
+    s = EMOJI_RE.sub("", s)
+    s = s.translate(_CONFUSABLES_MAP)
+    s = s.translate(_LEET_MAP)
+    s = unicodedata.normalize("NFKD", s)
+    s = _strip_combining(s)
+    s = _letters_only(s)
+    s = s.casefold()
+    s = _collapse_runs(s)
+    return s
+
+def _levenshtein(a: str, b: str, cap: int = 1) -> int:
+    # เวอร์ชันเบาๆ พร้อม early-exit ถ้าเกิน cap
+    if a == b: return 0
+    if abs(len(a) - len(b)) > cap: return cap + 1
+    if len(a) < len(b): a, b = b, a
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        minrow = cur[0]
+        for j, cb in enumerate(b, 1):
+            ins = cur[j-1] + 1
+            dele = prev[j] + 1
+            sub = prev[j-1] + (ca != cb)
+            val = min(ins, dele, sub)
+            cur.append(val)
+            if val < minrow: minrow = val
+        if minrow > cap: return cap + 1
+        prev = cur
+    return prev[-1]
+
+def _too_similar(nick_can: str, names_can: set[str], thr: int = 1) -> bool:
+    return any(_levenshtein(nick_can, x, cap=thr) <= thr for x in names_can)
+
+def _base_display_name(member: discord.Member | discord.User) -> str:
+    base = (
+        getattr(member, "nick", None)
+        or getattr(member, "global_name", None)
+        or getattr(member, "display_name", None)
+        or getattr(member, "name", None)
+        or ""
+    ).strip()
+    return re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
+
+def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
+    names = filter(None, {
+        getattr(member, "nick", ""),
+        getattr(member, "global_name", ""),
+        getattr(member, "display_name", ""),
+        getattr(member, "name", ""),
+        _base_display_name(member),
+    })
+    return {_canon_full(x) for x in names if x}
+
+def is_nick_too_close_to_discord(member: discord.Member | discord.User, nick: str, similar_thr: int = 1) -> tuple[bool, bool]:
+    """
+    คืนค่า (is_same, is_too_similar)
+    - is_same: เหมือนกันหลัง canonical (กันเลี่ยงด้วยอีโมจิ/วรรณยุกต์/leet/etc.)
+    - is_too_similar: ระยะห่าง Levenshtein <= similar_thr (เช่น ต่างแค่ 1 ตัว)
+    """
+    cand = _canon_full(nick)
+    names = _discord_names_set(member)
+    is_same = cand in names
+    is_too_similar = _too_similar(cand, names, thr=similar_thr)
+    return is_same, is_too_similar
+
 # ====== Gender Normalizer & Aliases ======
 def _norm_gender(s: str) -> str:
     s = (s or "").strip().lower()
@@ -102,7 +217,7 @@ _FEMALE_ALIASES_RAW = {
     "nữ", "phụ nữ", "con gái",
     "wanita", "perempuan", "cewek",
     "babae", "dalaga",
-    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "خातون",
+    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "خاتون",
     "أنثى", "امرأة", "بنت", "فتاة",
     "kadın", "bayan", "kız",
     "женщина", "девушка", "девочка", "жінка", "дівчина",
@@ -366,7 +481,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
     )
     await _log_chunks(log_ch, header, changed_lines + (["— Errors —"] + error_lines if error_lines else []))
 
-# =========== Modal / Views / Commands เดิมของคุณ (ย่อบางส่วน: core flow ไม่เปลี่ยน) ===========
+# =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
         label="Nickname / ชื่อเล่น",
@@ -416,6 +531,17 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
+        # === SMART/STRICT handling for duplicate nickname ===
+        is_same, is_sim = is_nick_too_close_to_discord(interaction.user, nick, similar_thr=1)
+        if REQUIRE_DIFFERENT_NICK and (is_same or is_sim):
+            await interaction.followup.send(
+                "❌ Nickname must be different from your current Discord name.\n"
+                "❌ ชื่อเล่นต้องต่างจากชื่อดิสคอร์ดของคุณจริง ๆ",
+                ephemeral=True
+            )
+            return
+        skip_nick_append = (not REQUIRE_DIFFERENT_NICK) and (is_same or is_sim)
+
         if any(ch.isdigit() for ch in self.gender.value) or any(c in INVALID_CHARS for c in self.gender.value) or contains_emoji(self.gender.value):
             await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
             return
@@ -429,6 +555,12 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
 
+        # แจ้งสถานะชื่อเล่นให้แอดมินรู้ (SMART mode)
+        if skip_nick_append:
+            note = "⚠️ matches or too similar to current Discord name"
+            note_th = "⚠️ ตรง/ใกล้กับชื่อดิสคอร์ดปัจจุบัน"
+            embed.add_field(name="Nickname Check", value=f"{note}\n{note_th}", inline=False)
+
         now = datetime.now(timezone(timedelta(hours=7)))
         embed.add_field(name="📅 Sent at", value=now.strftime("%d/%m/%Y %H:%M"), inline=False)
         embed.set_footer(text=f"User ID: {interaction.user.id}")
@@ -440,6 +572,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 gender_text=self.gender.value,
                 age_text=self.age.value,
                 form_name=self.name.value,
+                skip_nick_append=skip_nick_append,   # ส่ง flag ไปด้วย
             )
             await channel.send(
                 content=interaction.user.mention,
@@ -463,12 +596,13 @@ class VerificationView(discord.ui.View):
         await interaction.response.send_modal(VerificationForm())
 
 class ApproveRejectView(discord.ui.View):
-    def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str):
+    def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str, skip_nick_append: bool = False):
         super().__init__(timeout=None)
         self.user = user
         self.gender_text = (gender_text or "").strip()
         self.age_text = (age_text or "").strip()
         self.form_name = (form_name or "").strip()
+        self.skip_nick_append = bool(skip_nick_append)
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -520,16 +654,22 @@ class ApproveRejectView(discord.ui.View):
                     await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
                     return
 
+            # === Nickname handling ===
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
-                try:
-                    if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:
-                        new_nick = build_parenthesized_nick(member, self.form_name)
-                        current_nick = member.nick or ""
-                        if new_nick and new_nick != current_nick:
-                            await member.edit(nick=new_nick, reason="Verification: append form nickname")
-                except Exception:
-                    pass
+                # ถ้า SMART และชื่อซ้ำ/ใกล้ → ข้ามการแก้ชื่อ
+                if not self.skip_nick_append:
+                    bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
+                    try:
+                        if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:
+                            # double-check อีกชั้น (คำนวณใหม่ตอนอนุมัติ)
+                            is_same, is_sim = is_nick_too_close_to_discord(member, self.form_name, similar_thr=1)
+                            if not (not REQUIRE_DIFFERENT_NICK and (is_same or is_sim)):
+                                new_nick = build_parenthesized_nick(member, self.form_name)
+                                current_nick = member.nick or ""
+                                if new_nick and new_nick != current_nick:
+                                    await member.edit(nick=new_nick, reason="Verification: append form nickname")
+                    except Exception:
+                        pass
 
             pending_verifications.discard(self.user.id)
         else:
@@ -644,7 +784,7 @@ async def userinfo(ctx, member: discord.Member):
 
     await ctx.send("❌ No verification info found for this user.")
 
-# ---------- Single user refresh (คงของเดิม) ----------
+# ---------- Single user refresh ----------
 @bot.command(name="refresh_age")
 @commands.has_permissions(administrator=True)
 async def refresh_age(ctx, member: discord.Member):
@@ -695,7 +835,7 @@ async def refresh_age(ctx, member: discord.Member):
     got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
     await ctx.send(f"✅ อัปเดตอายุเป็น **{new_age}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
 
-# ---------- All users refresh (ใหม่) ----------
+# ---------- All users refresh ----------
 @bot.command(name="refresh_age_all")
 @commands.has_permissions(administrator=True)
 async def refresh_age_all(ctx):

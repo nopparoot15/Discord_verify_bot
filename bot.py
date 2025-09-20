@@ -32,6 +32,7 @@ ROLE_50_54  = 1418704062592843948
 ROLE_55_59  = 1418704067194261615
 ROLE_60_64  = 1418704072617496666
 ROLE_65_UP  = 1418704076119736390
+ROLE_AGE_UNDISCLOSED = 1419045340576747663  # << ใหม่: ไม่สะดวกกรอก/ไม่อยากเปิดเผย
 
 APPEND_FORM_NAME_TO_NICK = True
 
@@ -65,10 +66,8 @@ EMOJI_RE = re.compile(
 def contains_emoji(s: str) -> bool:
     return bool(EMOJI_RE.search(s or ""))
 
-# ====== Nickname canonicalizer (เข้ม) เพื่อเทียบกับชื่อดิสคอร์ด ======
+# ====== Nickname canonicalizer (เข้ม) & same-name block ======
 _ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
-
-# ตัวอักษรหน้าตาคล้ายยอดฮิต (Cyrillic/Greek -> Latin lookalikes)
 _CONFUSABLES_MAP = str.maketrans({
     # Cyrillic -> Latin
     "А":"A","В":"B","Е":"E","К":"K","М":"M","Н":"H","О":"O","Р":"P","С":"S","Т":"T","У":"Y","Х":"X",
@@ -77,37 +76,22 @@ _CONFUSABLES_MAP = str.maketrans({
     "Α":"A","Β":"B","Ε":"E","Ζ":"Z","Η":"H","Ι":"I","Κ":"K","Μ":"M","Ν":"N","Ο":"O","Ρ":"P","Τ":"T","Υ":"Y","Χ":"X",
     "α":"a","β":"b","ε":"e","ι":"i","κ":"k","ν":"n","ο":"o","ρ":"p","τ":"t","υ":"y","χ":"x",
 })
-# leet speak map (กันเลี่ยงด้วยตัวเลข/สัญลักษณ์ที่คล้าย)
 _LEET_MAP = str.maketrans({
     "0":"o","1":"l","3":"e","4":"a","5":"s","7":"t","8":"b","9":"g","2":"z","6":"g",
     "@":"a","$":"s","+":"t"
 })
-
 def _strip_combining(s: str) -> str:
-    # ลบเครื่องหมายกำกับเสียง/วรรณยุกต์ทุกภาษา (category Mn)
     return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-
 def _letters_only(s: str) -> str:
-    # เก็บเฉพาะตัวอักษร (Unicode letters) ตัดตัวเลข/สัญลักษณ์/ช่องว่างทิ้ง
     return "".join(ch for ch in s if unicodedata.category(ch).startswith("L"))
-
 def _collapse_runs(s: str) -> str:
-    # ลดตัวซ้ำติดกันยาว ๆ ให้เหลือตัวเดียว (เช่น aaaa -> a)
-    if not s:
-        return s
-    out = [s[0]]
+    if not s: return s
+    out=[s[0]]
     for ch in s[1:]:
-        if ch != out[-1]:
-            out.append(ch)
+        if ch!=out[-1]: out.append(ch)
     return "".join(out)
-
 def _canon_full(s: str) -> str:
-    """
-    NFKC -> ลบ zero-width/emoji -> map confusables -> leet -> NFKD -> ลบ combining ->
-    เก็บเฉพาะตัวอักษร -> casefold -> collapse runs
-    """
-    if not s:
-        return ""
+    if not s: return ""
     s = unicodedata.normalize("NFKC", s)
     s = _ZERO_WIDTH_RE.sub("", s)
     s = EMOJI_RE.sub("", s)
@@ -119,7 +103,6 @@ def _canon_full(s: str) -> str:
     s = s.casefold()
     s = _collapse_runs(s)
     return s
-
 def _base_display_name(member: discord.Member | discord.User) -> str:
     base = (
         getattr(member, "nick", None)
@@ -128,11 +111,8 @@ def _base_display_name(member: discord.Member | discord.User) -> str:
         or getattr(member, "name", None)
         or ""
     ).strip()
-    # ตัดส่วนวงเล็บท้าย (ถ้ามี)
     return re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
-
 def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
-    # รวมทุกชื่อที่เป็นไปได้ของผู้ใช้บนดิสคอร์ด แล้ว canonicalize
     names = filter(None, {
         getattr(member, "nick", ""),
         getattr(member, "global_name", ""),
@@ -204,11 +184,25 @@ _LGBT_ALIASES_RAW = {
     "논바이너리", "트랜스", "퀴어", "양성애", "동성애",
     "androgynous", "pangender", "demiboy", "demigirl",
 }
+def _norm_simple(s: str) -> str:
+    return re.sub(r'[\s\.\-_\/\\]+', '', (s or '').strip().lower())
+
 MALE_ALIASES   = {_norm_gender(x) for x in _MALE_ALIASES_RAW}
 FEMALE_ALIASES = {_norm_gender(x) for x in _FEMALE_ALIASES_RAW}
 LGBT_ALIASES   = {_norm_gender(x) for x in _LGBT_ALIASES_RAW}
 MALE_PREFIXES   = {_norm_gender(x) for x in ["ช", "ชา", "ชาย", "ผู้ช", "เพศช", "m", "ma", "masc", "man", "男", "おとこ", "だん", "남"]}
 FEMALE_PREFIXES = {_norm_gender(x) for x in ["ห", "หญ", "หญิ", "หญิง", "ผู้ห", "เพศห", "f", "fe", "fem", "woman", "wo", "女", "おんな", "じょ", "여"]}
+
+# ====== Age "ไม่ระบุ" aliases ======
+_AGE_UNDISCLOSED_ALIASES_RAW = {
+    "ไม่ระบุ","ไม่บอก","ไม่เปิดเผย","ไม่อยากเปิดเผย","ไม่สะดวกกรอก","ไม่สะดวก","ไม่ต้องการระบุ","ปกปิด",
+    "prefer not to say","prefer-not-to-say","undisclosed","unspecified","unknown","private","secret",
+    "n/a","na","none","x","-","—"
+}
+AGE_UNDISCLOSED_ALIASES = {_norm_simple(x) for x in _AGE_UNDISCLOSED_ALIASES_RAW}
+
+def is_age_undisclosed(text: str) -> bool:
+    return _norm_simple(text) in AGE_UNDISCLOSED_ALIASES
 
 def resolve_gender_role_id(text: str) -> int:
     t = _norm_gender(text)
@@ -221,6 +215,9 @@ def resolve_gender_role_id(text: str) -> int:
     return ROLE_LGBT
 
 def resolve_age_role_id(age_text: str) -> int | None:
+    # ใหม่: รองรับ "ไม่ระบุ"
+    if is_age_undisclosed(age_text):
+        return ROLE_AGE_UNDISCLOSED
     try:
         age = int((age_text or "").strip())
     except ValueError:
@@ -303,7 +300,7 @@ GENDER_ROLE_IDS_ALL = [ROLE_MALE, ROLE_FEMALE, ROLE_LGBT]
 AGE_ROLE_IDS_ALL = [rid for rid in [
     ROLE_0_12, ROLE_13_15, ROLE_16_18, ROLE_19_21, ROLE_22_24,
     ROLE_25_29, ROLE_30_34, ROLE_35_39, ROLE_40_44, ROLE_45_49,
-    ROLE_50_54, ROLE_55_59, ROLE_60_64, ROLE_65_UP
+    ROLE_50_54, ROLE_55_59, ROLE_60_64, ROLE_65_UP, ROLE_AGE_UNDISCLOSED  # << เพิ่ม
 ] if rid and rid > 0]
 
 # ---------- Utils for refresh ----------
@@ -352,7 +349,6 @@ async def _build_latest_verification_index(guild: discord.Guild, limit: int = 20
         u = msg.mentions[0]
         if u is None:
             continue
-        # เก็บอันล่าสุด (history คืนล่าสุดก่อนอยู่แล้ว)
         if u.id not in index:
             index[u.id] = (msg.embeds[0], msg.created_at)
     return index
@@ -386,16 +382,31 @@ async def _run_full_age_refresh(guild: discord.Guild):
 
     changed_lines = []
     error_lines = []
-    unchanged = 0
 
     for member, embed in candidates:
-        # อ่านข้อมูลจาก embed
         age_text = _find_embed_field(embed, "age", "อายุ")
         sent_text = _find_embed_field(embed, "sent at")
         if not age_text or not sent_text:
             error_lines.append(f"❌ {member.mention}: Embed ขาด Age/Sent at")
             continue
 
+        # ใหม่: กรณีไม่ระบุอายุ
+        if is_age_undisclosed(str(age_text)):
+            new_role = guild.get_role(ROLE_AGE_UNDISCLOSED)
+            to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
+            try:
+                if to_remove:
+                    await member.remove_roles(*to_remove, reason="Monthly age refresh → undisclosed")
+                if new_role and new_role not in member.roles:
+                    await member.add_roles(new_role, reason="Monthly age refresh → undisclosed")
+                changed_lines.append(f"✅ {member.mention}: อายุไม่ระบุ → {new_role.name if new_role else '—'}")
+            except discord.Forbidden:
+                error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (สิทธิ์)")
+            except discord.HTTPException:
+                error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (HTTP)")
+            continue
+
+        # เดิม: ตัวเลขอายุ
         try:
             old_age = int(str(age_text).strip())
         except ValueError:
@@ -412,8 +423,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
         new_role_id = resolve_age_role_id(str(new_age))
         new_role = guild.get_role(new_role_id) if new_role_id else None
 
-        # ถอดทุกยศอายุเดิมก่อน
-        to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL]
+        to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
         try:
             if to_remove:
                 await member.remove_roles(*to_remove, reason=f"Monthly age refresh → now {new_age}")
@@ -424,7 +434,6 @@ async def _run_full_age_refresh(guild: discord.Guild):
             error_lines.append(f"❌ {member.mention}: ถอดยศอายุเดิมไม่สำเร็จ (HTTP)")
             continue
 
-        # ใส่ยศใหม่ถ้ามีแมป
         if new_role:
             try:
                 await member.add_roles(new_role, reason=f"Monthly age refresh → now {new_age}")
@@ -444,7 +453,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
     )
     await _log_chunks(log_ch, header, changed_lines + (["— Errors —"] + error_lines if error_lines else []))
 
-# =========== Modal / Views / Commands (core flow เดิม) ===========
+# =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
         label="Nickname / ชื่อเล่น",
@@ -453,10 +462,10 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         min_length=2, max_length=32, required=True
     )
     age = discord.ui.TextInput(
-        label="Age (numbers only) / อายุ (ตัวเลขเท่านั้น)",
-        placeholder="เช่น 21 (ตัวเลข 1–3 หลัก)",
+        label="Age / อายุ (ใส่ตัวเลข หรือพิมพ์ 'ไม่ระบุ')",
+        placeholder='เช่น 21 หรือ "ไม่ระบุ" / "prefer not to say"',
         style=discord.TextStyle.short,
-        min_length=1, max_length=3, required=True
+        min_length=1, max_length=16, required=True   # เผื่อคำยาว
     )
     gender = discord.ui.TextInput(
         label="Gender / เพศ",
@@ -478,10 +487,12 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             return
 
         age_str = (self.age.value or "").strip()
-        if not re.fullmatch(r"\d{1,3}", age_str):
+        # ยอมรับตัวเลข หรือ keyword ไม่ระบุ
+        if not (re.fullmatch(r"\d{1,3}", age_str) or is_age_undisclosed(age_str)):
             await interaction.followup.send(
-                "❌ Invalid age. Use numbers only (1–3 digits).\n"
-                "❌ อายุไม่ถูกต้อง กรุณาใส่เป็นตัวเลขล้วน 1–3 หลัก",
+                "❌ รูปแบบอายุไม่ถูกต้อง\n"
+                "• ใส่เป็นตัวเลข 1–3 หลัก เช่น 21\n"
+                "• หรือพิมพ์ว่า “ไม่ระบุ / ไม่อยากเปิดเผย / prefer not to say”",
                 ephemeral=True
             )
             return
@@ -494,7 +505,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
             return
 
-        # === NEW: บล็อกถ้าชื่อเล่น 'ตรง' กับชื่อดิสคอร์ดหลัง normalize แบบเข้ม (กันหลบทุกทาง) ===
+        # บล็อกกรณีชื่อเล่น == ชื่อดิสคอร์ด (หลัง normalize แบบเข้ม)
         if _canon_full(nick) in _discord_names_set(interaction.user):
             await interaction.followup.send(
                 "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
@@ -514,7 +525,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
         embed.set_thumbnail(url=thumb_url)
         embed.add_field(name="Nickname / ชื่อเล่น", value=self.name.value, inline=False)
-        embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)
+        embed.add_field(name="Age / อายุ", value=self.age.value, inline=False)  # เก็บข้อความตามที่กรอก (เลข/ไม่ระบุ)
         embed.add_field(name="Gender / เพศ", value=self.gender.value, inline=False)
 
         now = datetime.now(timezone(timedelta(hours=7)))
@@ -608,7 +619,7 @@ class ApproveRejectView(discord.ui.View):
                     await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
                     return
 
-            # วงเล็บชื่อเล่นตามนโยบายเดิม (ตรงเป๊ะถูกบล็อกไปแล้วตั้งแต่ตอนส่งฟอร์ม)
+            # วงเล็บชื่อเล่นตามนโยบายเดิม (กรณี exact ถูกบล็อกตั้งแต่ตอนส่งแล้ว)
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
@@ -733,7 +744,7 @@ async def userinfo(ctx, member: discord.Member):
 
     await ctx.send("❌ No verification info found for this user.")
 
-# ---------- Single user refresh (คงของเดิม) ----------
+# ---------- Single user refresh ----------
 @bot.command(name="refresh_age")
 @commands.has_permissions(administrator=True)
 async def refresh_age(ctx, member: discord.Member):
@@ -748,6 +759,27 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
         return
 
+    # เคส "ไม่ระบุ"
+    if is_age_undisclosed(str(age_text)):
+        new_age_role = ctx.guild.get_role(ROLE_AGE_UNDISCLOSED)
+        to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
+        if to_remove:
+            try:
+                await member.remove_roles(*to_remove, reason="Refresh age → undisclosed")
+            except discord.Forbidden:
+                await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
+                return
+        if new_age_role and new_age_role not in member.roles:
+            try:
+                await member.add_roles(new_age_role, reason="Refresh age → undisclosed")
+            except discord.Forbidden:
+                await ctx.send("⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: ไม่ระบุอายุ")
+                return
+        got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
+        await ctx.send(f"✅ ตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว (ผู้ใช้เลือกไม่ระบุอายุ)")
+        return
+
+    # เดิม: ตัวเลขอายุ
     try:
         old_age = int(str(age_text).strip())
     except ValueError:
@@ -766,7 +798,7 @@ async def refresh_age(ctx, member: discord.Member):
     new_age_role_id = resolve_age_role_id(str(new_age))
     new_age_role = ctx.guild.get_role(new_age_role_id) if new_age_role_id else None
 
-    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL]
+    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
     if to_remove:
         try:
             await member.remove_roles(*to_remove, reason=f"Refresh age → now {new_age}")
@@ -784,7 +816,7 @@ async def refresh_age(ctx, member: discord.Member):
     got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
     await ctx.send(f"✅ อัปเดตอายุเป็น **{new_age}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
 
-# ---------- All users refresh (ใหม่) ----------
+# ---------- All users refresh ----------
 @bot.command(name="refresh_age_all")
 @commands.has_permissions(administrator=True)
 async def refresh_age_all(ctx):
@@ -815,7 +847,6 @@ async def _monthly_age_refresh_daemon():
         year = now_local.year
         month = now_local.month
         if now_local.day > 1 or (now_local.day == 1 and now_local.hour >= 6):
-            # ข้ามไปเดือนถัดไป
             if month == 12:
                 year += 1
                 month = 1
@@ -830,19 +861,16 @@ async def _monthly_age_refresh_daemon():
         except asyncio.CancelledError:
             return
 
-        # ถึงเวลาแล้ว: รันทุก guild ที่มีช่อง log นี้
         try:
             for guild in bot.guilds:
                 log_ch = guild.get_channel(LOG_CHANNEL_ID)
                 if not log_ch:
                     continue
-                # กันรันซ้ำด้วยการเช็ค tag ในห้อง log
                 if await _already_ran_this_month(log_ch, tz):
                     continue
                 await _run_full_age_refresh(guild)
                 await log_ch.send("✅ DONE")
         except Exception:
-            # อย่าให้ daemon ตาย
             pass
 
 # ====== Persistent View Loader ======
@@ -850,7 +878,6 @@ async def _monthly_age_refresh_daemon():
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
-    # start daemon once
     if not getattr(bot, "_age_refresh_daemon_started", False):
         bot.loop.create_task(_monthly_age_refresh_daemon())
         bot._age_refresh_daemon_started = True

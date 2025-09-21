@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 # ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
-LOG_CHANNEL_ID = 1418941833819590699  # ห้องเก็บ logs ของการรีเฟรชอายุ (ใหม่)
+LOG_CHANNEL_ID = 1418941833819590699  # ห้องเก็บ logs ของการรีเฟรชอายุ
 
 ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
@@ -36,6 +36,16 @@ ROLE_65_UP  = 1418704076119736390
 ROLE_AGE_UNDISCLOSED = 1419045340576747663  # อายุไม่ระบุ/ไม่อยากเปิดเผย
 
 APPEND_FORM_NAME_TO_NICK = True
+
+# ====== AUTO REFRESH CONFIG (ตั้งค่าเวลาเองได้) ======
+AUTO_REFRESH_ENABLED = True
+REFRESH_TZ = timezone(timedelta(hours=7))  # Asia/Bangkok
+REFRESH_FREQUENCY = "YEARLY"               # "YEARLY" | "MONTHLY" | "WEEKLY" | "DAILY"
+REFRESH_AT_HOUR = 6
+REFRESH_AT_MINUTE = 0
+REFRESH_AT_DAY = 1                         # ใช้กับ MONTHLY/YEARLY
+REFRESH_AT_MONTH = 1                       # ใช้กับ YEARLY (1=มกราคม)
+REFRESH_AT_WEEKDAY = 0                     # ใช้กับ WEEKLY (0=Mon .. 6=Sun)
 
 # ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
@@ -112,7 +122,7 @@ def _base_display_name(member: discord.Member | discord.User) -> str:
         or getattr(member, "name", None)
         or ""
     ).strip()
-    # ตัดวงเล็บท้ายชื่อ (ถ้ามี)
+    # ลบวงเล็บชื่อเล่นเดิม (ถ้ามี)
     return re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
 def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
     names = filter(None, {
@@ -162,7 +172,7 @@ _FEMALE_ALIASES_RAW = {
     "nữ", "phụ nữ", "con gái",
     "wanita", "perempuan", "cewek",
     "babae", "dalaga",
-    "महिला", "औरत", "लड़की", "ladki", "aurat", "ขاتון",
+    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "ขатون",
     "أنثى", "امرأة", "بنت", "فتاة",
     "kadın", "bayan", "kız",
     "женщина", "девушка", "девочка", "жінка", "дівчина",
@@ -294,7 +304,6 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
         or member.name
         or ""
     ).strip()
-    # ตัดวงเล็บท้ายชื่อเดิม (ถ้ามี)
     base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
     real = (form_name or "").strip()
     candidate = f"{base} ({real})".strip()
@@ -403,9 +412,9 @@ async def _run_full_age_refresh(guild: discord.Guild):
             to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
             try:
                 if to_remove:
-                    await member.remove_roles(*to_remove, reason="Monthly age refresh → undisclosed")
+                    await member.remove_roles(*to_remove, reason="Age refresh → undisclosed")
                 if new_role and new_role not in member.roles:
-                    await member.add_roles(new_role, reason="Monthly age refresh → undisclosed")
+                    await member.add_roles(new_role, reason="Age refresh → undisclosed")
                 changed_lines.append(f"✅ {member.mention}: อายุไม่ระบุ → {new_role.name if new_role else '—'}")
             except discord.Forbidden:
                 error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (สิทธิ์)")
@@ -432,7 +441,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
         to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
         try:
             if to_remove:
-                await member.remove_roles(*to_remove, reason=f"Monthly age refresh → now {new_age}")
+                await member.remove_roles(*to_remove, reason=f"Age refresh → now {new_age}")
         except discord.Forbidden:
             error_lines.append(f"❌ {member.mention}: ไม่มีสิทธิ์ถอดยศอายุเดิม")
             continue
@@ -442,7 +451,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
 
         if new_role:
             try:
-                await member.add_roles(new_role, reason=f"Monthly age refresh → now {new_age}")
+                await member.add_roles(new_role, reason=f"Age refresh → now {new_age}")
                 old_names = ", ".join(r.name for r in to_remove) if to_remove else "—"
                 changed_lines.append(f"✅ {member.mention}: {new_age} ปี → {new_role.name} (removed: {old_names})")
             except discord.Forbidden:
@@ -452,53 +461,60 @@ async def _run_full_age_refresh(guild: discord.Guild):
         else:
             changed_lines.append(f"⚠️ {member.mention}: {new_age} ปี → ไม่มี role ที่แมปไว้")
 
+    # tag ใช้บอก period (รองรับ YEARLY/MONTHLY/WEEKLY/DAILY)
+    tag = _refresh_period_tag(now, REFRESH_FREQUENCY)
     header = (
-        f"[AGE-REFRESH] {now.year}-{now.month:02d} • Guild: {guild.name}\n"
+        f"{tag} • Guild: {guild.name}\n"
         f"Members found: {len(candidates)}\n"
         f"Changed/No-map: {len(changed_lines)} • Errors: {len(error_lines)}"
     )
     await _log_chunks(log_ch, header, changed_lines + (["— Errors —"] + error_lines if error_lines else []))
 
-# ====== Helpers for editing approval embed ======
-async def _find_latest_verification_message(guild: discord.Guild, member: discord.Member) -> discord.Message | None:
+# ====== Update latest approval embed (helpers) ======
+async def _find_latest_approval_message(guild: discord.Guild, member: discord.Member):
     ch = guild.get_channel(APPROVAL_CHANNEL_ID)
     if not ch:
         return None
-    async for m in ch.history(limit=500):
-        if m.author == bot.user and m.embeds and m.mentions and member in m.mentions:
+    async for m in ch.history(limit=1000):
+        if m.author == bot.user and m.embeds and member in m.mentions:
             return m
     return None
 
-def _set_embed_field_value(embed: discord.Embed, keys: list[str], value: str):
-    keys_low = [k.lower() for k in keys]
+def _set_or_add_field(embed: discord.Embed, name_keys: tuple[str, ...], display_name: str, value: str):
+    """แก้ค่า field ตามคีย์ที่ระบุ ถ้าไม่เจอให้ add ใหม่"""
+    name_keys_low = tuple(k.lower() for k in name_keys)
     for i, f in enumerate(embed.fields):
-        name = (f.name or "").lower()
-        if any(k in name for k in keys_low):
-            embed.set_field_at(i, name=f.name, value=value, inline=f.inline)
+        nm = (f.name or "").lower()
+        if any(k in nm for k in name_keys_low):
+            embed.set_field_at(i, name=display_name, value=value, inline=False)
             return
-    # ถ้าไม่พบฟิลด์ ก็เพิ่มใหม่ (ใช้ชื่อ key แรก)
-    embed.add_field(name=keys[0].title(), value=value, inline=False)
+    embed.add_field(name=display_name, value=value, inline=False)
 
-def _append_audit_footer(embed: discord.Embed, actor: str, label: str = "Edited"):
-    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-    orig = embed.footer.text or ""
-    embed.set_footer(text=(f"{orig} • {label} by {actor} • {stamp}" if orig else f"{label} by {actor} • {stamp}"))
-
-async def _update_approval_embed(member: discord.Member, *, nickname: str | None = None, age: str | None = None, gender_name: str | None = None, actor: str | None = None) -> bool:
-    msg = await _find_latest_verification_message(member.guild, member)
-    if not msg or not msg.embeds:
+async def _update_approval_embed_for_member(guild: discord.Guild, member: discord.Member, *,
+                                            nickname: str | None = None,
+                                            age: str | None = None,
+                                            gender: str | None = None) -> bool:
+    """
+    อัปเดตค่าใน embed ล่าสุดของสมาชิกในห้องอนุมัติ
+    คืน True ถ้าอัปเดตสำเร็จ / False ถ้าไม่พบข้อความให้แก้
+    """
+    msg = await _find_latest_approval_message(guild, member)
+    if not msg:
         return False
-    e = copy_embed_fields(msg.embeds[0])
+
+    e = msg.embeds[0]
     if nickname is not None:
-        _set_embed_field_value(e, ["Nickname / ชื่อเล่น", "nickname", "ชื่อเล่น"], nickname if nickname else "ไม่ระบุ")
+        _set_or_add_field(e, ("nickname", "ชื่อเล่น"), "Nickname / ชื่อเล่น", nickname or "ไม่ระบุ")
     if age is not None:
-        _set_embed_field_value(e, ["Age / อายุ", "age", "อายุ"], age if age else "ไม่ระบุ")
-    if gender_name is not None:
-        _set_embed_field_value(e, ["Gender / เพศ", "gender", "เพศ"], gender_name if gender_name else "ไม่ระบุ")
-    if actor:
-        _append_audit_footer(e, actor, "Edited")
-    await msg.edit(embed=e)
-    return True
+        _set_or_add_field(e, ("age", "อายุ"), "Age / อายุ", age or "ไม่ระบุ")
+    if gender is not None:
+        _set_or_add_field(e, ("gender", "เพศ"), "Gender / เพศ", gender or "ไม่ระบุ")
+
+    try:
+        await msg.edit(embed=e)
+        return True
+    except discord.HTTPException:
+        return False
 
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
@@ -561,7 +577,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 )
                 return
 
-        # --- Validate gender ---
+        # --- Validate gender (ถ้าไม่ว่างค่อยตรวจความสะอาด; ว่าง=ไม่ระบุ) ---
         gender_raw = (self.gender.value or "")
         if gender_raw.strip():
             if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
@@ -571,7 +587,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
         pending_verifications.add(interaction.user.id)
 
-        # เตรียมค่าที่จะแสดงใน embed
+        # เตรียมค่าที่แสดงใน embed
         display_nick = (nick if nick else "ไม่ระบุ")
         display_age = (age_raw if age_raw else "ไม่ระบุ")
         display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
@@ -593,7 +609,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 user=interaction.user,
                 gender_text=gender_raw,
                 age_text=age_raw if age_raw else "ไม่ระบุ",
-                form_name=nick,
+                form_name=nick,  # ว่างได้: ฝั่งอนุมัติจะไม่แก้ชื่อ
             )
             await channel.send(
                 content=interaction.user.mention,
@@ -675,7 +691,7 @@ class ApproveRejectView(discord.ui.View):
                     return
 
             # วงเล็บชื่อเล่น: ทำเฉพาะเมื่อกรอกชื่อเล่นมาเท่านั้น
-            if APPEND_FORM_NAME_TO_NICK and self.form_name:
+            if APPEND_FORM_NAME_TO_NICK && self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
                     if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:
@@ -887,10 +903,8 @@ def _bot_can_edit_member_and_role(ctx: commands.Context, member: discord.Member,
     bot_me = ctx.guild.me
     if not bot_me:
         return False, "❌ ไม่พบสถานะของบอทในกิลด์"
-    # เป้าหมาย: ต้องอยู่ใต้บอท
     if bot_me.top_role <= member.top_role or member.id == ctx.guild.owner_id:
         return False, "❌ บอทไม่มีลำดับยศสูงพอที่จะจัดการสมาชิกคนนี้"
-    # ถ้ามีเป้าหมายเป็น role: บอทต้องสูงกว่า role ด้วย
     if role and bot_me.top_role <= role:
         return False, f"❌ บอทไม่มีลำดับยศสูงพอที่จะจัดการยศ: {role.name}"
     return True, ""
@@ -910,46 +924,43 @@ async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: st
 
     want_clear = (_norm_simple(nickname) in CLEAR_ALIASES) or (nickname.strip() == "")
     if want_clear:
-        base = _base_display_name(member)  # ตัดวงเล็บเดิม (ถ้ามี)
-        new_nick = base
-        if (member.nick or base) == new_nick:
-            await ctx.send(f"ℹ️ {member.mention} ไม่มีวงเล็บชื่อเล่นอยู่แล้ว")
-            return
+        base = _base_display_name(member)
         try:
-            await member.edit(nick=new_nick, reason="Admin: clear form nickname")
-            actor = getattr(ctx.author, "display_name", None) or ctx.author.name
-            updated = await _update_approval_embed(member, nickname="", actor=actor)
-            await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{new_nick}` (เป้าหมาย: {member.mention})" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
+            await member.edit(nick=base, reason="Admin: clear form nickname")
+            await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{base}` (เป้าหมาย: {member.mention})")
         except discord.Forbidden:
-            await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้")
+            await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้"); return
         except discord.HTTPException:
-            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ")
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ"); return
+
+        # อัปเดต embed ให้เป็น "ไม่ระบุ"
+        updated = await _update_approval_embed_for_member(ctx.guild, member, nickname="ไม่ระบุ")
+        if not updated:
+            await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
         return
 
-    # Validate ชื่อเล่น (ถ้าไม่ใช่โหมด clear)
+    # validate ชื่อเล่น
     if len(nickname) < 2 or len(nickname) > 32 or any(ch.isdigit() for ch in nickname) \
        or any(c in INVALID_CHARS for c in nickname) or contains_emoji(nickname):
         await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
         return
-    # กันกรณีชื่อเล่นเหมือนชื่อดิส (ดัดรูปแบบก็ไม่ผ่าน)
     if _canon_full(nickname) in _discord_names_set(member):
         await ctx.send("❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของเป้าหมายจริง ๆ")
         return
 
     new_nick = build_parenthesized_nick(member, nickname)
-    if (member.nick or "") == new_nick:
-        await ctx.send("ℹ️ ไม่ได้เปลี่ยน เพราะได้ชื่อเดิมอยู่แล้ว")
-        return
-
     try:
         await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nickname}")
-        actor = getattr(ctx.author, "display_name", None) or ctx.author.name
-        updated = await _update_approval_embed(member, nickname=nickname, actor=actor)
-        await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
+        await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}")
     except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้")
+        await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้"); return
     except discord.HTTPException:
-        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ")
+        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ"); return
+
+    # อัปเดต embed ให้โชว์ชื่อเล่นใหม่
+    updated = await _update_approval_embed_for_member(ctx.guild, member, nickname=nickname)
+    if not updated:
+        await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
 
 @bot.command(name="setgender", aliases=["gender", "เพศ", "ปรับเพศ"])
 @commands.has_permissions(manage_roles=True)
@@ -973,29 +984,24 @@ async def setgender(ctx: commands.Context, member: discord.Member, *, gender_tex
         await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
         return
 
-    # ถอดเพศเดิมทั้งหมด (ยกเว้นอันที่จะใส่)
     to_remove = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and r.id != role.id]
     try:
         if to_remove:
             await member.remove_roles(*to_remove, reason="Admin: set gender (enforce single gender role)")
-    except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์ถอดยศเพศเดิมของสมาชิกคนนี้")
-        return
-
-    if role not in member.roles:
-        try:
+        if role not in member.roles:
             await member.add_roles(role, reason="Admin: set gender")
-        except discord.Forbidden:
-            await ctx.send("❌ บอทไม่มีสิทธิ์เพิ่มยศเพศให้สมาชิกคนนี้")
-            return
-        except discord.HTTPException:
-            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนเพิ่มยศเพศ")
-            return
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศเพศให้สมาชิกคนนี้"); return
+    except discord.HTTPException:
+        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศเพศ"); return
 
     removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
-    actor = getattr(ctx.author, "display_name", None) or ctx.author.name
-    updated = await _update_approval_embed(member, gender_name=role.name, actor=actor)
-    await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
+    await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+
+    # อัปเดต embed (ใช้ชื่อ role เป็นค่าที่แสดง)
+    updated = await _update_approval_embed_for_member(ctx.guild, member, gender=role.name)
+    if not updated:
+        await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
 
 @bot.command(name="setage", aliases=["age", "อายุ", "ปรับอายุ"])
 @commands.has_permissions(manage_roles=True)
@@ -1006,7 +1012,6 @@ async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str
     - ส่งคำอย่าง ไม่ระบุ/undisclosed/n-a/- → ตั้งเป็นยศ 'อายุไม่ระบุ'
     - ส่ง 'clear'/'ลบ' → ตั้งเป็น 'อายุไม่ระบุ' เช่นกัน
     """
-    # แปลง clear เป็น 'ไม่ระบุ'
     if _norm_simple(age_text) in CLEAR_ALIASES or not age_text.strip():
         age_text = "ไม่ระบุ"
 
@@ -1027,45 +1032,36 @@ async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str
         await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
         return
 
-    # ถอดอายุเดิมทั้งหมด (ยกเว้นอันที่จะใส่)
     to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != role.id]
     try:
         if to_remove:
             await member.remove_roles(*to_remove, reason="Admin: set age (enforce single age role)")
-    except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์ถอดยศอายุเดิมของสมาชิกคนนี้")
-        return
-
-    if role not in member.roles:
-        try:
+        if role not in member.roles:
             await member.add_roles(role, reason="Admin: set age")
-        except discord.Forbidden:
-            await ctx.send("❌ บอทไม่มีสิทธิ์เพิ่มยศอายุให้สมาชิกคนนี้")
-            return
-        except discord.HTTPException:
-            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนเพิ่มยศอายุ")
-            return
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศอายุให้สมาชิกคนนี้"); return
+    except discord.HTTPException:
+        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศอายุ"); return
 
     removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
+    await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
 
-    # ค่าที่จะแสดงใน embed
+    # อัปเดต embed
     if role.id == ROLE_AGE_UNDISCLOSED:
-        display_age = "ไม่ระบุ"
+        disp_age = "ไม่ระบุ"
     else:
-        at = age_text.strip()
-        display_age = at if re.fullmatch(r"\d{1,3}", at or "") else role.name
-
-    actor = getattr(ctx.author, "display_name", None) or ctx.author.name
-    updated = await _update_approval_embed(member, age=display_age, actor=actor)
-    await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
+        m = re.search(r"\d{1,3}", age_text)
+        disp_age = m.group(0) if m else age_text.strip()
+    updated = await _update_approval_embed_for_member(ctx.guild, member, age=disp_age)
+    if not updated:
+        await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
 
 # ====== Help command (list & details) ======
 try:
-    bot.remove_command("help")  # เอา default help ของ discord.py ออก เพื่อใช้ของเรา
+    bot.remove_command("help")
 except Exception:
     pass
 
-# คำอธิบายสั้น (แสดงในรายการรวม)
 _SHORT_DESC = {
     "help": "แสดงรายการคำสั่งทั้งหมด หรือรายละเอียดของคำสั่งที่ระบุ",
     "verify_embed": "ส่ง Embed ปุ่มยืนยันตัวตนไปยังห้อง VERIFY_CHANNEL_ID",
@@ -1077,7 +1073,6 @@ _SHORT_DESC = {
     "setage": "ตั้งยศอายุ (กรอกตัวเลขหรือ 'ไม่ระบุ')",
 }
 
-# รายละเอียดเชิงลึก (แสดงเมื่อพิมพ์ $help <command>)
 _HELP_DETAILS = {
     "help": {
         "usage": "$help [ชื่อคำสั่ง]",
@@ -1121,9 +1116,7 @@ _HELP_DETAILS = {
     },
 }
 
-_ADMIN_COMMANDS = {
-    "verify_embed", "userinfo", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage"
-}
+_ADMIN_COMMANDS = {"verify_embed", "userinfo", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage"}
 
 def _fmt_cmd_list(prefix: str, names: list[str]) -> str:
     lines = []
@@ -1137,7 +1130,6 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
     prefix = ctx.prefix or "$"
 
     if command_name:
-        # รายละเอียดรายคำสั่ง
         cmd = bot.get_command(command_name.lower())
         if not cmd:
             await ctx.send(f"❌ ไม่พบคำสั่งชื่อ `{command_name}`")
@@ -1150,7 +1142,6 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
         example = detail.get("example", "-")
         note = detail.get("note", None)
 
-        # รวม aliases (ถ้ามี)
         aliases = ", ".join(cmd.aliases) if getattr(cmd, "aliases", None) else "—"
         is_admin = "✅ ผู้ใช้ทั่วไป" if name not in _ADMIN_COMMANDS else "🛡️ ผู้ดูแล (ต้องมีสิทธิ์ที่เกี่ยวข้อง)"
 
@@ -1169,7 +1160,6 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
         await ctx.send(embed=embed)
         return
 
-    # โหมดแสดงรายการทั้งหมด (สรุป)
     all_cmds = {c.name for c in bot.commands if not c.hidden}
     general = sorted(all_cmds - _ADMIN_COMMANDS | {"help"})
     admin = sorted(all_cmds & _ADMIN_COMMANDS)
@@ -1184,10 +1174,22 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
 
     await ctx.send(embed=embed)
 
-# ====== Monthly scheduler (new) ======
-async def _already_ran_this_month(log_ch: discord.TextChannel, tz: timezone) -> bool:
+# ====== AUTO REFRESH DAEMON (configurable) ======
+def _refresh_period_tag(now_local: datetime, freq: str) -> str:
+    if freq == "YEARLY":
+        return f"[AGE-REFRESH] {now_local.year}"
+    if freq == "MONTHLY":
+        return f"[AGE-REFRESH] {now_local.year}-{now_local.month:02d}"
+    if freq == "WEEKLY":
+        iso = now_local.isocalendar()
+        return f"[AGE-REFRESH] {iso.year}-W{iso.week:02d}"
+    if freq == "DAILY":
+        return f"[AGE-REFRESH] {now_local.date().isoformat()}"
+    return f"[AGE-REFRESH] {now_local.year}-{now_local.month:02d}"
+
+async def _already_ran_this_period(log_ch: discord.TextChannel, tz: timezone, freq: str) -> bool:
     now = datetime.now(tz)
-    tag = f"[AGE-REFRESH] {now.year}-{now.month:02d}"
+    tag = _refresh_period_tag(now, freq)
     try:
         async for m in log_ch.history(limit=200):
             if m.author == bot.user and m.content and tag in m.content:
@@ -1196,25 +1198,70 @@ async def _already_ran_this_month(log_ch: discord.TextChannel, tz: timezone) -> 
         pass
     return False
 
-async def _monthly_age_refresh_daemon():
-    tz = timezone(timedelta(hours=7))  # Asia/Bangkok
+def _last_day_of_month(year: int, month: int) -> int:
+    if month == 12:
+        n = datetime(year+1, 1, 1)
+    else:
+        n = datetime(year, month+1, 1)
+    return (n - timedelta(days=1)).day
+
+def _compute_next_run_local(now_local: datetime) -> datetime:
+    freq = REFRESH_FREQUENCY.upper()
+    h, mi = REFRESH_AT_HOUR, REFRESH_AT_MINUTE
+
+    if freq == "YEARLY":
+        y = now_local.year
+        m = max(1, min(12, REFRESH_AT_MONTH))
+        dmax = _last_day_of_month(y, m)
+        d = max(1, min(dmax, REFRESH_AT_DAY))
+        target = datetime(y, m, d, h, mi, 0, tzinfo=REFRESH_TZ)
+        if now_local >= target:
+            y += 1
+            dmax = _last_day_of_month(y, m)
+            d = max(1, min(dmax, REFRESH_AT_DAY))
+            target = datetime(y, m, d, h, mi, 0, tzinfo=REFRESH_TZ)
+        return target
+
+    if freq == "MONTHLY":
+        y, m = now_local.year, now_local.month
+        dmax = _last_day_of_month(y, m)
+        d = max(1, min(dmax, REFRESH_AT_DAY))
+        target = datetime(y, m, d, h, mi, 0, tzinfo=REFRESH_TZ)
+        if now_local >= target:
+            if m == 12:
+                y += 1; m = 1
+            else:
+                m += 1
+            dmax = _last_day_of_month(y, m)
+            d = max(1, min(dmax, REFRESH_AT_DAY))
+            target = datetime(y, m, d, h, mi, 0, tzinfo=REFRESH_TZ)
+        return target
+
+    if freq == "WEEKLY":
+        # หาวัน REFRESH_AT_WEEKDAY ของสัปดาห์ถัดไป/นี้
+        weekday = max(0, min(6, REFRESH_AT_WEEKDAY))
+        days_ahead = (weekday - now_local.weekday()) % 7
+        target = (now_local + timedelta(days=days_ahead)).replace(hour=h, minute=mi, second=0, microsecond=0)
+        if now_local >= target:
+            target = target + timedelta(days=7)
+        return target
+
+    # DAILY
+    target = now_local.replace(hour=h, minute=mi, second=0, microsecond=0)
+    if now_local >= target:
+        target = target + timedelta(days=1)
+    return target
+
+async def _auto_refresh_daemon():
+    if not AUTO_REFRESH_ENABLED:
+        return
+    tz = REFRESH_TZ
     await bot.wait_until_ready()
     while not bot.is_closed():
         now_utc = datetime.now(timezone.utc)
         now_local = now_utc.astimezone(tz)
-
-        # หา "วันที่ 1 เวลา 06:00" รอบถัดไป
-        year = now_local.year
-        month = now_local.month
-        if now_local.day > 1 or (now_local.day == 1 and now_local.hour >= 6):
-            if month == 12:
-                year += 1
-                month = 1
-            else:
-                month += 1
-        target_local = datetime(year, month, 1, 6, 0, 0, tzinfo=tz)
+        target_local = _compute_next_run_local(now_local)
         target_utc = target_local.astimezone(timezone.utc)
-
         sleep_sec = max(1, int((target_utc - now_utc).total_seconds()))
         try:
             await asyncio.sleep(sleep_sec)
@@ -1226,11 +1273,12 @@ async def _monthly_age_refresh_daemon():
                 log_ch = guild.get_channel(LOG_CHANNEL_ID)
                 if not log_ch:
                     continue
-                if await _already_ran_this_month(log_ch, tz):
+                if await _already_ran_this_period(log_ch, tz, REFRESH_FREQUENCY):
                     continue
                 await _run_full_age_refresh(guild)
-                await log_ch.send("✅ DONE")
+                await log_ch.send(_refresh_period_tag(datetime.now(tz), REFRESH_FREQUENCY) + " ✅ DONE")
         except Exception:
+            # กัน daemon ล้ม
             pass
 
 # ====== Persistent View Loader ======
@@ -1238,8 +1286,8 @@ async def _monthly_age_refresh_daemon():
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
-    if not getattr(bot, "_age_refresh_daemon_started", False):
-        bot.loop.create_task(_monthly_age_refresh_daemon())
+    if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
+        bot.loop.create_task(_auto_refresh_daemon())
         bot._age_refresh_daemon_started = True
 
 # ====== Run bot ======

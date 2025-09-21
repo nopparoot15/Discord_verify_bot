@@ -1,11 +1,19 @@
 import os
 import re
 import io
+import logging
 import unicodedata
 import asyncio
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
+
+# ====== LOGGING ======
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger("verify-bot")
 
 # ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 1402889712888447037
@@ -16,7 +24,7 @@ ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
-ROLE_GENDER_UNDISCLOSED = 1419046348023398421 
+ROLE_GENDER_UNDISCLOSED = 1419046348023398421
 
 # --- Age roles ---
 ROLE_0_12   = 1402907371696558131
@@ -46,6 +54,8 @@ REFRESH_AT_MINUTE = 0
 REFRESH_AT_DAY = 1                         # ใช้กับ MONTHLY/YEARLY
 REFRESH_AT_MONTH = 1                       # ใช้กับ YEARLY (1=มกราคม)
 REFRESH_AT_WEEKDAY = 0                     # ใช้กับ WEEKLY (0=Mon .. 6=Sun)
+
+SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
 # ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
@@ -278,6 +288,7 @@ async def build_avatar_attachment(user: discord.User):
         f = discord.File(io.BytesIO(data), filename=filename)
         return f, filename
     except Exception:
+        logger.exception("build_avatar_attachment failed for user=%s", user.id if user else None)
         return None, None
 
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
@@ -286,14 +297,17 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
         description=src.description or discord.Embed.Empty,
         color=src.color if src.color is not None else discord.Embed.Empty,
     )
-    if src.author and (src.author.name or src.author.icon_url or src.author.url):
-        e.set_author(name=getattr(src.author, "name", discord.Embed.Empty) or discord.Embed.Empty)
-    if src.footer and (src.footer.text or src.footer.icon_url):
-        e.set_footer(text=getattr(src.footer, "text", discord.Embed.Empty) or discord.Embed.Empty)
-    if src.image and src.image.url:
-        e.set_image(url=src.image.url)
-    for f in src.fields:
-        e.add_field(name=f.name, value=f.value, inline=f.inline)
+    try:
+        if src.author and (src.author.name or src.author.icon_url or src.author.url):
+            e.set_author(name=getattr(src.author, "name", discord.Embed.Empty) or discord.Embed.Empty)
+        if src.footer and (src.footer.text or src.footer.icon_url):
+            e.set_footer(text=getattr(src.footer, "text", discord.Embed.Empty) or discord.Embed.Empty)
+        if src.image and src.image.url:
+            e.set_image(url=src.image.url)
+        for f in src.fields:
+            e.add_field(name=f.name, value=f.value, inline=f.inline)
+    except Exception:
+        logger.exception("copy_embed_fields failed")
     return e
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
@@ -350,9 +364,12 @@ async def _latest_verification_embed_for(member: discord.Member) -> discord.Embe
     channel = member.guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         return None
-    async for msg in channel.history(limit=500):
-        if msg.author == bot.user and msg.embeds and member in msg.mentions:
-            return msg.embeds[0]
+    try:
+        async for msg in channel.history(limit=500):
+            if msg.author == bot.user and msg.embeds and member in msg.mentions:
+                return msg.embeds[0]
+    except Exception:
+        logger.exception("history scan failed in _latest_verification_embed_for for member=%s", member.id)
     return None
 
 async def _build_latest_verification_index(guild: discord.Guild, limit: int = 2000):
@@ -360,34 +377,43 @@ async def _build_latest_verification_index(guild: discord.Guild, limit: int = 20
     if not channel:
         return {}
     index = {}
-    async for msg in channel.history(limit=limit):
-        if msg.author != bot.user or not msg.embeds or not msg.mentions:
-            continue
-        u = msg.mentions[0]
-        if u is None:
-            continue
-        if u.id not in index:
-            index[u.id] = (msg.embeds[0], msg.created_at)
+    try:
+        async for msg in channel.history(limit=limit):
+            if msg.author != bot.user or not msg.embeds or not msg.mentions:
+                continue
+            u = msg.mentions[0]
+            if u is None:
+                continue
+            if u.id not in index:
+                index[u.id] = (msg.embeds[0], msg.created_at)
+    except Exception:
+        logger.exception("history scan failed in _build_latest_verification_index")
     return index
 
 async def _log_chunks(channel: discord.TextChannel, header: str, lines: list[str], chunk_size: int = 1900):
-    if not lines:
-        await channel.send(header)
-        return
-    buf = header + "\n"
-    for line in lines:
-        if len(buf) + len(line) + 1 > chunk_size:
-            await channel.send(buf.rstrip())
-            buf = ""
-        buf += line + "\n"
-    if buf.strip():
-        await channel.send(buf.rstrip())
+    try:
+        if not lines:
+            await channel.send(header, allowed_mentions=SAFE_MENTIONS)
+            return
+        buf = header + "\n"
+        for line in lines:
+            if len(buf) + len(line) + 1 > chunk_size:
+                await channel.send(buf.rstrip(), allowed_mentions=SAFE_MENTIONS)
+                buf = ""
+            buf += line + "\n"
+        if buf.strip():
+            await channel.send(buf.rstrip(), allowed_mentions=SAFE_MENTIONS)
+    except discord.Forbidden:
+        logger.error("Cannot send logs to channel id=%s (Forbidden)", channel.id if channel else None)
+    except discord.HTTPException:
+        logger.exception("HTTP error while sending logs")
 
 async def _run_full_age_refresh(guild: discord.Guild):
     tz = timezone(timedelta(hours=7))
     now = datetime.now(tz)
     log_ch = guild.get_channel(LOG_CHANNEL_ID)
     if not log_ch:
+        logger.warning("LOG_CHANNEL_ID not found in guild=%s", guild.id)
         return
 
     index = await _build_latest_verification_index(guild)
@@ -401,67 +427,70 @@ async def _run_full_age_refresh(guild: discord.Guild):
     error_lines = []
 
     for member, embed in candidates:
-        age_text = _find_embed_field(embed, "age", "อายุ")
-        sent_text = _find_embed_field(embed, "sent at")
-        if not age_text or not sent_text:
-            error_lines.append(f"❌ {member.mention}: Embed ขาด Age/Sent at")
-            continue
+        try:
+            age_text = _find_embed_field(embed, "age", "อายุ")
+            sent_text = _find_embed_field(embed, "sent at")
+            if not age_text or not sent_text:
+                error_lines.append(f"❌ {member.mention}: Embed ขาด Age/Sent at")
+                continue
 
-        if is_age_undisclosed(str(age_text)):
-            new_role = guild.get_role(ROLE_AGE_UNDISCLOSED)
+            if is_age_undisclosed(str(age_text)):
+                new_role = guild.get_role(ROLE_AGE_UNDISCLOSED)
+                to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
+                try:
+                    if to_remove:
+                        await member.remove_roles(*to_remove, reason="Age refresh → undisclosed")
+                    if new_role and new_role not in member.roles:
+                        await member.add_roles(new_role, reason="Age refresh → undisclosed")
+                    changed_lines.append(f"✅ {member.mention}: อายุไม่ระบุ → {new_role.name if new_role else '—'}")
+                except discord.Forbidden:
+                    error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (สิทธิ์)")
+                except discord.HTTPException:
+                    error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (HTTP)")
+                continue
+
+            try:
+                old_age = int(str(age_text).strip())
+            except ValueError:
+                error_lines.append(f"❌ {member.mention}: Age เดิมไม่ใช่ตัวเลข: {age_text!r}")
+                continue
+
+            sent_dt = _parse_sent_at(sent_text)
+            if not sent_dt:
+                error_lines.append(f"❌ {member.mention}: Sent at ไม่ถูกต้อง: {sent_text!r}")
+                continue
+
+            added_years = _years_between(sent_dt, now)
+            new_age = max(old_age + added_years, 0)
+            new_role_id = resolve_age_role_id(str(new_age))
+            new_role = guild.get_role(new_role_id) if new_role_id else None
+
             to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
             try:
                 if to_remove:
-                    await member.remove_roles(*to_remove, reason="Age refresh → undisclosed")
-                if new_role and new_role not in member.roles:
-                    await member.add_roles(new_role, reason="Age refresh → undisclosed")
-                changed_lines.append(f"✅ {member.mention}: อายุไม่ระบุ → {new_role.name if new_role else '—'}")
+                    await member.remove_roles(*to_remove, reason=f"Age refresh → now {new_age}")
             except discord.Forbidden:
-                error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (สิทธิ์)")
+                error_lines.append(f"❌ {member.mention}: ไม่มีสิทธิ์ถอดยศอายุเดิม")
+                continue
             except discord.HTTPException:
-                error_lines.append(f"❌ {member.mention}: ปรับยศ 'ไม่ระบุอายุ' ไม่สำเร็จ (HTTP)")
-            continue
+                error_lines.append(f"❌ {member.mention}: ถอดยศอายุเดิมไม่สำเร็จ (HTTP)")
+                continue
 
-        try:
-            old_age = int(str(age_text).strip())
-        except ValueError:
-            error_lines.append(f"❌ {member.mention}: Age เดิมไม่ใช่ตัวเลข: {age_text!r}")
-            continue
+            if new_role:
+                try:
+                    await member.add_roles(new_role, reason=f"Age refresh → now {new_age}")
+                    old_names = ", ".join(r.name for r in to_remove) if to_remove else "—"
+                    changed_lines.append(f"✅ {member.mention}: {new_age} ปี → {new_role.name} (removed: {old_names})")
+                except discord.Forbidden:
+                    error_lines.append(f"❌ {member.mention}: เพิ่มยศใหม่ไม่สำเร็จ (สิทธิ์ไม่พอ)")
+                except discord.HTTPException:
+                    error_lines.append(f"❌ {member.mention}: เพิ่มยศใหม่ไม่สำเร็จ (HTTP)")
+            else:
+                changed_lines.append(f"⚠️ {member.mention}: {new_age} ปี → ไม่มี role ที่แมปไว้")
+        except Exception:
+            logger.exception("Unexpected error while refreshing member=%s", member.id)
+            error_lines.append(f"❌ {member.mention}: Unexpected error (ดู log ของบอท)")
 
-        sent_dt = _parse_sent_at(sent_text)
-        if not sent_dt:
-            error_lines.append(f"❌ {member.mention}: Sent at ไม่ถูกต้อง: {sent_text!r}")
-            continue
-
-        added_years = _years_between(sent_dt, now)
-        new_age = max(old_age + added_years, 0)
-        new_role_id = resolve_age_role_id(str(new_age))
-        new_role = guild.get_role(new_role_id) if new_role_id else None
-
-        to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
-        try:
-            if to_remove:
-                await member.remove_roles(*to_remove, reason=f"Age refresh → now {new_age}")
-        except discord.Forbidden:
-            error_lines.append(f"❌ {member.mention}: ไม่มีสิทธิ์ถอดยศอายุเดิม")
-            continue
-        except discord.HTTPException:
-            error_lines.append(f"❌ {member.mention}: ถอดยศอายุเดิมไม่สำเร็จ (HTTP)")
-            continue
-
-        if new_role:
-            try:
-                await member.add_roles(new_role, reason=f"Age refresh → now {new_age}")
-                old_names = ", ".join(r.name for r in to_remove) if to_remove else "—"
-                changed_lines.append(f"✅ {member.mention}: {new_age} ปี → {new_role.name} (removed: {old_names})")
-            except discord.Forbidden:
-                error_lines.append(f"❌ {member.mention}: เพิ่มยศใหม่ไม่สำเร็จ (สิทธิ์ไม่พอ)")
-            except discord.HTTPException:
-                error_lines.append(f"❌ {member.mention}: เพิ่มยศใหม่ไม่สำเร็จ (HTTP)")
-        else:
-            changed_lines.append(f"⚠️ {member.mention}: {new_age} ปี → ไม่มี role ที่แมปไว้")
-
-    # tag ใช้บอก period (รองรับ YEARLY/MONTHLY/WEEKLY/DAILY)
     tag = _refresh_period_tag(now, REFRESH_FREQUENCY)
     header = (
         f"{tag} • Guild: {guild.name}\n"
@@ -475,9 +504,12 @@ async def _find_latest_approval_message(guild: discord.Guild, member: discord.Me
     ch = guild.get_channel(APPROVAL_CHANNEL_ID)
     if not ch:
         return None
-    async for m in ch.history(limit=1000):
-        if m.author == bot.user and m.embeds and member in m.mentions:
-            return m
+    try:
+        async for m in ch.history(limit=1000):
+            if m.author == bot.user and m.embeds and member in m.mentions:
+                return m
+    except Exception:
+        logger.exception("history scan failed in _find_latest_approval_message for member=%s", member.id)
     return None
 
 def _set_or_add_field(embed: discord.Embed, name_keys: tuple[str, ...], display_name: str, value: str):
@@ -494,26 +526,24 @@ async def _update_approval_embed_for_member(guild: discord.Guild, member: discor
                                             nickname: str | None = None,
                                             age: str | None = None,
                                             gender: str | None = None) -> bool:
-    """
-    อัปเดตค่าใน embed ล่าสุดของสมาชิกในห้องอนุมัติ
-    คืน True ถ้าอัปเดตสำเร็จ / False ถ้าไม่พบข้อความให้แก้
-    """
     msg = await _find_latest_approval_message(guild, member)
     if not msg:
         return False
-
-    e = msg.embeds[0]
-    if nickname is not None:
-        _set_or_add_field(e, ("nickname", "ชื่อเล่น"), "Nickname / ชื่อเล่น", nickname or "ไม่ระบุ")
-    if age is not None:
-        _set_or_add_field(e, ("age", "อายุ"), "Age / อายุ", age or "ไม่ระบุ")
-    if gender is not None:
-        _set_or_add_field(e, ("gender", "เพศ"), "Gender / เพศ", gender or "ไม่ระบุ")
-
     try:
+        e = msg.embeds[0]
+        if nickname is not None:
+            _set_or_add_field(e, ("nickname", "ชื่อเล่น"), "Nickname / ชื่อเล่น", nickname or "ไม่ระบุ")
+        if age is not None:
+            _set_or_add_field(e, ("age", "อายุ"), "Age / อายุ", age or "ไม่ระบุ")
+        if gender is not None:
+            _set_or_add_field(e, ("gender", "เพศ"), "Gender / เพศ", gender or "ไม่ระบุ")
         await msg.edit(embed=e)
         return True
     except discord.HTTPException:
+        logger.exception("HTTP error while editing approval embed for member=%s", member.id)
+        return False
+    except Exception:
+        logger.exception("Unexpected error while editing approval embed for member=%s", member.id)
         return False
 
 # =========== Modal / Views / Commands ===========
@@ -538,91 +568,106 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
 
-        if interaction.user.id in pending_verifications:
-            await interaction.followup.send(
-                "❗ You already submitted a verification request. Please wait for admin review.\n"
-                "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
-                ephemeral=True
-            )
-            return
-
-        # --- Validate age ---
-        age_raw = (self.age.value or "").strip()
-        if not (age_raw == "" or re.fullmatch(r"\d{1,3}", age_raw) or is_age_undisclosed(age_raw)):
-            await interaction.followup.send(
-                "❌ รูปแบบอายุไม่ถูกต้อง\n"
-                "• ใส่เป็นตัวเลข 1–3 หลัก เช่น 21\n"
-                "• หรือพิมพ์/ปล่อยว่าง เพื่อ “ไม่ระบุ”",
-                ephemeral=True
-            )
-            return
-
-        # --- Validate nickname (เฉพาะเมื่อกรอกมา) ---
-        nick = (self.name.value or "").strip()
-        if nick:
-            if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick) or contains_emoji(nick):
+            if interaction.user.id in pending_verifications:
                 await interaction.followup.send(
-                    "❌ Nickname invalid (letters only, 2–32; no digits/symbols/emoji).",
-                    ephemeral=True
-                )
-                return
-            if _canon_full(nick) in _discord_names_set(interaction.user):
-                await interaction.followup.send(
-                    "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
-                    "   (เปลี่ยนพิมพ์เล็ก-ใหญ่ ใส่อักษรพิเศษ/อีโมจิ หรือใช้เลขแทนอักษร ไม่ถือว่าต่าง)",
+                    "❗ You already submitted a verification request. Please wait for admin review.\n"
+                    "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
                     ephemeral=True
                 )
                 return
 
-        # --- Validate gender (ถ้าไม่ว่างค่อยตรวจความสะอาด; ว่าง=ไม่ระบุ) ---
-        gender_raw = (self.gender.value or "")
-        if gender_raw.strip():
-            if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
-                if any(ch.isdigit() for ch in gender_raw) or any(c in INVALID_CHARS for c in gender_raw) or contains_emoji(gender_raw):
-                    await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
+            # --- Validate age ---
+            age_raw = (self.age.value or "").strip()
+            if not (age_raw == "" or re.fullmatch(r"\d{1,3}", age_raw) or is_age_undisclosed(age_raw)):
+                await interaction.followup.send(
+                    "❌ รูปแบบอายุไม่ถูกต้อง\n"
+                    "• ใส่เป็นตัวเลข 1–3 หลัก เช่น 21\n"
+                    "• หรือพิมพ์/ปล่อยว่าง เพื่อ “ไม่ระบุ”",
+                    ephemeral=True
+                )
+                return
+
+            # --- Validate nickname (เฉพาะเมื่อกรอกมา) ---
+            nick = (self.name.value or "").strip()
+            if nick:
+                if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick) or contains_emoji(nick):
+                    await interaction.followup.send(
+                        "❌ Nickname invalid (letters only, 2–32; no digits/symbols/emoji).",
+                        ephemeral=True
+                    )
+                    return
+                if _canon_full(nick) in _discord_names_set(interaction.user):
+                    await interaction.followup.send(
+                        "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
+                        "   (เปลี่ยนพิมพ์เล็ก-ใหญ่ ใส่อักษรพิเศษ/อีโมจิ หรือใช้เลขแทนอักษร ไม่ถือว่าต่าง)",
+                        ephemeral=True
+                    )
                     return
 
-        pending_verifications.add(interaction.user.id)
+            # --- Validate gender (ถ้าไม่ว่างค่อยตรวจความสะอาด; ว่าง=ไม่ระบุ) ---
+            gender_raw = (self.gender.value or "")
+            if gender_raw.strip():
+                if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
+                    if any(ch.isdigit() for ch in gender_raw) or any(c in INVALID_CHARS for c in gender_raw) or contains_emoji(gender_raw):
+                        await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
+                        return
 
-        # เตรียมค่าที่แสดงใน embed
-        display_nick = (nick if nick else "ไม่ระบุ")
-        display_age = (age_raw if age_raw else "ไม่ระบุ")
-        display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
+            # เตรียมค่าที่แสดงใน embed
+            display_nick = (nick if nick else "ไม่ระบุ")
+            display_age = (age_raw if age_raw else "ไม่ระบุ")
+            display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
 
-        embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
-        thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
-        embed.set_thumbnail(url=thumb_url)
-        embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
-        embed.add_field(name="Age / อายุ", value=display_age, inline=False)
-        embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
+            embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
+            try:
+                thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
+                embed.set_thumbnail(url=thumb_url)
+            except Exception:
+                pass
+            embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
+            embed.add_field(name="Age / อายุ", value=display_age, inline=False)
+            embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
 
-        now = datetime.now(timezone(timedelta(hours=7)))
-        embed.add_field(name="📅 Sent at", value=now.strftime("%d/%m/%Y %H:%M"), inline=False)
-        embed.set_footer(text=f"User ID: {interaction.user.id}")
+            now = datetime.now(timezone(timedelta(hours=7)))
+            embed.add_field(name="📅 Sent at", value=now.strftime("%d/%m/%Y %H:%M"), inline=False)
+            embed.set_footer(text=f"User ID: {interaction.user.id}")
 
-        channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
-        if channel:
+            channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
+            if not channel:
+                await interaction.followup.send("❌ ไม่พบห้องอนุมัติ กรุณาเช็ค APPROVAL_CHANNEL_ID", ephemeral=True)
+                return
+
             view = ApproveRejectView(
                 user=interaction.user,
                 gender_text=gender_raw,
                 age_text=age_raw if age_raw else "ไม่ระบุ",
-                form_name=nick, 
+                form_name=nick,
             )
             await channel.send(
                 content=interaction.user.mention,
                 embed=embed,
                 view=view,
-                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True),
+                allowed_mentions=SAFE_MENTIONS,
             )
 
-        await interaction.followup.send(
-            "✅ Verification request submitted. Please wait for admin approval.\n"
-            "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน",
-            ephemeral=True
-        )
+            # เพิ่มเข้าคิว หลังส่งข้อความสำเร็จ
+            pending_verifications.add(interaction.user.id)
+
+            await interaction.followup.send(
+                "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน",
+                ephemeral=True
+            )
+        except Exception:
+            logger.exception("on_submit failed")
+            # rollback ถ้าเผื่อเพิ่มไปแล้ว
+            pending_verifications.discard(interaction.user.id)
+            try:
+                await interaction.followup.send("❌ เกิดข้อผิดพลาดไม่คาดคิด โปรดลองใหม่ภายหลัง", ephemeral=True)
+            except Exception:
+                pass
 
 class VerificationView(discord.ui.View):
     def __init__(self):
@@ -630,7 +675,14 @@ class VerificationView(discord.ui.View):
 
     @discord.ui.button(label="Verify Identity / ยืนยันตัวตน", style=discord.ButtonStyle.success, emoji="✅", custom_id="verify_button")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VerificationForm())
+        try:
+            await interaction.response.send_modal(VerificationForm())
+        except Exception:
+            logger.exception("open VerificationForm failed")
+            try:
+                await interaction.response.send_message("❌ เปิดแบบฟอร์มไม่สำเร็จ โปรดลองใหม่", ephemeral=True)
+            except Exception:
+                pass
 
 class ApproveRejectView(discord.ui.View):
     def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str):
@@ -642,258 +694,309 @@ class ApproveRejectView(discord.ui.View):
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
-        member = interaction.guild.get_member(self.user.id)
-        if not member:
-            try:
-                member = await interaction.guild.fetch_member(self.user.id)
-            except Exception:
-                await interaction.followup.send("❌ Member not found in guild.", ephemeral=True)
-                return
-
-        general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
-        gender_role = interaction.guild.get_role(resolve_gender_role_id(self.gender_text))
-        age_role_id = resolve_age_role_id(self.age_text)
-        age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
-
-        if member and general_role and gender_role:
-            # enforce one gender role
-            try:
-                to_remove_gender = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and (gender_role is None or r.id != gender_role.id)]
-                if to_remove_gender:
-                    await member.remove_roles(*to_remove_gender, reason="Verification: enforce single gender role")
-            except discord.Forbidden:
-                await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศเพศเดิม", ephemeral=True)
-                return
-
-            # enforce one age role (only if new exists)
-            if age_role:
-                try:
-                    to_remove_age = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != age_role.id]
-                    if to_remove_age:
-                        await member.remove_roles(*to_remove_age, reason="Verification: enforce single age role")
-                except discord.Forbidden:
-                    await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศอายุเดิม", ephemeral=True)
-                    return
-
-            roles_to_add = []
-            if general_role and general_role not in member.roles: roles_to_add.append(general_role)
-            if gender_role and gender_role not in member.roles: roles_to_add.append(gender_role)
-            if age_role and age_role not in member.roles: roles_to_add.append(age_role)
-
-            if roles_to_add:
-                try:
-                    await member.add_roles(*roles_to_add, reason="Verified")
-                except discord.Forbidden:
-                    await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
-                    return
-
-            # วงเล็บชื่อเล่น: ทำเฉพาะเมื่อกรอกชื่อเล่นมาเท่านั้น
-            if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
-                try:
-                    if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:
-                        new_nick = build_parenthesized_nick(member, self.form_name)
-                        current_nick = member.nick or ""
-                        if new_nick and new_nick != current_nick:
-                            await member.edit(nick=new_nick, reason="Verification: append form nickname")
-                except Exception:
-                    pass
-
-            pending_verifications.discard(self.user.id)
-        else:
-            await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
-
-        for child in self.children:
-            if getattr(child, "custom_id", None) == "approve_button":
-                child.label = "✅ Approved / อนุมัติแล้ว"
-                child.style = discord.ButtonStyle.success
-            elif getattr(child, "custom_id", None) == "reject_button":
-                child.style = discord.ButtonStyle.secondary
-            child.disabled = True
-
         try:
-            msg = interaction.message
-            if msg and msg.embeds:
-                e = msg.embeds[0]
-                actor = getattr(interaction.user, "display_name", None) or interaction.user.name
-                stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-                orig = e.footer.text or ""
-                footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
-                e.set_footer(text=footer)
-                await msg.edit(embed=e, view=self)
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+
+            member = interaction.guild.get_member(self.user.id)
+            if not member:
+                try:
+                    member = await interaction.guild.fetch_member(self.user.id)
+                except Exception:
+                    await interaction.followup.send("❌ Member not found in guild.", ephemeral=True)
+                    return
+
+            general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
+            gender_role = interaction.guild.get_role(resolve_gender_role_id(self.gender_text))
+            age_role_id = resolve_age_role_id(self.age_text)
+            age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
+
+            if member and general_role and gender_role:
+                # enforce one gender role
+                try:
+                    to_remove_gender = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and (gender_role is None or r.id != gender_role.id)]
+                    if to_remove_gender:
+                        await member.remove_roles(*to_remove_gender, reason="Verification: enforce single gender role")
+                except discord.Forbidden:
+                    await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศเพศเดิม", ephemeral=True)
+                    return
+
+                # enforce one age role (only if new exists)
+                if age_role:
+                    try:
+                        to_remove_age = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != age_role.id]
+                        if to_remove_age:
+                            await member.remove_roles(*to_remove_age, reason="Verification: enforce single age role")
+                    except discord.Forbidden:
+                        await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศอายุเดิม", ephemeral=True)
+                        return
+
+                roles_to_add = []
+                if general_role and general_role not in member.roles: roles_to_add.append(general_role)
+                if gender_role and gender_role not in member.roles: roles_to_add.append(gender_role)
+                if age_role and age_role not in member.roles: roles_to_add.append(age_role)
+
+                if roles_to_add:
+                    try:
+                        await member.add_roles(*roles_to_add, reason="Verified")
+                    except discord.Forbidden:
+                        await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
+                        return
+
+                # วงเล็บชื่อเล่น: ทำเฉพาะเมื่อกรอกชื่อเล่นมาเท่านั้น
+                if APPEND_FORM_NAME_TO_NICK and self.form_name:
+                    try:
+                        bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
+                        if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:
+                            new_nick = build_parenthesized_nick(member, self.form_name)
+                            current_nick = member.nick or ""
+                            if new_nick and new_nick != current_nick:
+                                await member.edit(nick=new_nick, reason="Verification: append form nickname")
+                    except discord.Forbidden:
+                        pass
+                    except discord.HTTPException:
+                        pass
+                    except Exception:
+                        logger.exception("edit nick failed during approve for member=%s", member.id)
+
+                pending_verifications.discard(self.user.id)
             else:
-                await interaction.message.edit(view=self)
-        except discord.NotFound:
-            pass
+                await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
+
+            # ปรับปุ่ม & footer
+            for child in self.children:
+                if getattr(child, "custom_id", None) == "approve_button":
+                    child.label = "✅ Approved / อนุมัติแล้ว"
+                    child.style = discord.ButtonStyle.success
+                elif getattr(child, "custom_id", None) == "reject_button":
+                    child.style = discord.ButtonStyle.secondary
+                child.disabled = True
+
+            try:
+                msg = interaction.message
+                if msg and msg.embeds:
+                    e = msg.embeds[0]
+                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                    orig = e.footer.text or ""
+                    footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
+                    e.set_footer(text=footer)
+                    await msg.edit(embed=e, view=self)
+                else:
+                    await interaction.message.edit(view=self)
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                logger.exception("edit approval message failed (approve)")
+        except Exception:
+            logger.exception("Approve handler crashed")
+            try:
+                await interaction.followup.send("❌ เกิดข้อผิดพลาดระหว่างอนุมัติ", ephemeral=True)
+            except Exception:
+                pass
 
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
-        pending_verifications.discard(self.user.id)
         try:
-            await self.user.send(
-                "❌ Your verification was rejected. Please contact admin.\n"
-                "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
-            )
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+
+            pending_verifications.discard(self.user.id)
+            try:
+                await self.user.send(
+                    "❌ Your verification was rejected. Please contact admin.\n"
+                    "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
+                )
+            except Exception:
+                await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
+
+            for child in self.children:
+                if getattr(child, "custom_id", None) == "reject_button":
+                    child.label = "❌ Rejected / ปฏิเสธแล้ว"
+                    child.style = discord.ButtonStyle.danger
+                elif getattr(child, "custom_id", None) == "approve_button":
+                    child.style = discord.ButtonStyle.secondary
+                child.disabled = True
+
+            try:
+                msg = interaction.message
+                if msg and msg.embeds:
+                    e = msg.embeds[0]
+                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                    orig = e.footer.text or ""
+                    footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
+                    e.set_footer(text=footer)
+                    await msg.edit(embed=e, view=self)
+                else:
+                    await interaction.message.edit(view=self)
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                logger.exception("edit approval message failed (reject)")
         except Exception:
-            await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
-
-        for child in self.children:
-            if getattr(child, "custom_id", None) == "reject_button":
-                child.label = "❌ Rejected / ปฏิเสธแล้ว"
-                child.style = discord.ButtonStyle.danger
-            elif getattr(child, "custom_id", None) == "approve_button":
-                child.style = discord.ButtonStyle.secondary
-            child.disabled = True
-
-        try:
-            msg = interaction.message
-            if msg and msg.embeds:
-                e = msg.embeds[0]
-                actor = getattr(interaction.user, "display_name", None) or interaction.user.name
-                stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-                orig = e.footer.text or ""
-                footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
-                e.set_footer(text=footer)
-                await msg.edit(embed=e, view=self)
-            else:
-                await interaction.message.edit(view=self)
-        except discord.NotFound:
-            pass
+            logger.exception("Reject handler crashed")
+            try:
+                await interaction.followup.send("❌ เกิดข้อผิดพลาดระหว่างปฏิเสธ", ephemeral=True)
+            except Exception:
+                pass
 
 # ====== Commands ======
 @bot.command(name="verify_embed")
 @commands.has_permissions(administrator=True)
 async def verify_embed(ctx):
-    channel = ctx.guild.get_channel(VERIFY_CHANNEL_ID)
-    if not channel:
-        await ctx.send("❌ VERIFY_CHANNEL_ID not found.")
-        return
-    embed = discord.Embed(
-        title="📌 Welcome / ยินดีต้อนรับ",
-        description="Click the button below to verify your identity.\nกดปุ่มด้านล่างเพื่อยืนยันตัวตนของคุณ",
-        color=discord.Color.blue()
-    )
-    embed.set_image(url="https://i.pinimg.com/originals/da/79/68/da7968c54b12ba7ebf7dfd70dd1faaf2.gif")
-    embed.set_footer(text="Verification System / ระบบยืนยันตัวตนโดย Bot")
-    await channel.send(embed=embed, view=VerificationView())
-    await ctx.send(f"✅ Verification embed sent to {channel.mention}")
+    try:
+        channel = ctx.guild.get_channel(VERIFY_CHANNEL_ID)
+        if not channel:
+            await ctx.send("❌ VERIFY_CHANNEL_ID not found.")
+            return
+        embed = discord.Embed(
+            title="📌 Welcome / ยินดีต้อนรับ",
+            description="Click the button below to verify your identity.\nกดปุ่มด้านล่างเพื่อยืนยันตัวตนของคุณ",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Verification System / ระบบยืนยันตัวตนโดย Bot")
+        await channel.send(embed=embed, view=VerificationView(), allowed_mentions=SAFE_MENTIONS)
+        await ctx.send(f"✅ Verification embed sent to {channel.mention}")
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ส่งข้อความไปยังห้องเป้าหมาย")
+    except discord.HTTPException:
+        logger.exception("verify_embed HTTP error")
+        await ctx.send("❌ ส่ง embed ไม่สำเร็จ (HTTP)")
 
 @bot.command(name="userinfo")
 @commands.has_permissions(administrator=True)
 async def userinfo(ctx, member: discord.Member):
-    channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
-    if not channel:
-        await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
-        return
+    try:
+        channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
+        if not channel:
+            await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
+            return
 
-    async for message in channel.history(limit=200):
-        if message.author == bot.user and message.embeds and message.mentions:
-            if member in message.mentions:
-                embed0 = message.embeds[0]
-                new_embed = copy_embed_fields(embed0)
+        async for message in channel.history(limit=200):
+            if message.author == bot.user and message.embeds and message.mentions:
+                if member in message.mentions:
+                    embed0 = message.embeds[0]
+                    new_embed = copy_embed_fields(embed0)
 
-                if message.attachments:
-                    try:
-                        att = message.attachments[0]
-                        data = await att.read()
-                        fname = att.filename or f"avatar_{member.id}.png"
-                        file = discord.File(io.BytesIO(data), filename=fname)
-                        new_embed.set_thumbnail(url=f"attachment://{fname}")
-                        await ctx.send(file=file, embed=new_embed)
-                        return
-                    except Exception:
-                        pass
+                    if message.attachments:
+                        try:
+                            att = message.attachments[0]
+                            data = await att.read()
+                            fname = att.filename or f"avatar_{member.id}.png"
+                            file = discord.File(io.BytesIO(data), filename=fname)
+                            new_embed.set_thumbnail(url=f"attachment://{fname}")
+                            await ctx.send(file=file, embed=new_embed)
+                            return
+                        except Exception:
+                            logger.exception("Reading attachment failed in userinfo")
 
-                await ctx.send(embed=new_embed)
-                return
+                    await ctx.send(embed=new_embed)
+                    return
 
-    await ctx.send("❌ No verification info found for this user.")
+        await ctx.send("❌ No verification info found for this user.")
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์อ่านประวัติข้อความในห้องอนุมัติ")
+    except discord.HTTPException:
+        logger.exception("userinfo HTTP error")
+        await ctx.send("❌ ดึงข้อมูลไม่สำเร็จ (HTTP)")
+    except Exception:
+        logger.exception("userinfo crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 # ---------- Single user refresh ----------
 @bot.command(name="refresh_age")
 @commands.has_permissions(administrator=True)
 async def refresh_age(ctx, member: discord.Member):
-    embed = await _latest_verification_embed_for(member)
-    if not embed:
-        await ctx.send("❌ ไม่พบข้อมูลคำขอยืนยันล่าสุดของผู้ใช้นี้ในห้องอนุมัติ")
-        return
+    try:
+        embed = await _latest_verification_embed_for(member)
+        if not embed:
+            await ctx.send("❌ ไม่พบข้อมูลคำขอยืนยันล่าสุดของผู้ใช้นี้ในห้องอนุมัติ")
+            return
 
-    age_text = _find_embed_field(embed, "age", "อายุ")
-    sent_text = _find_embed_field(embed, "sent at")
-    if not age_text or not sent_text:
-        await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
-        return
+        age_text = _find_embed_field(embed, "age", "อายุ")
+        sent_text = _find_embed_field(embed, "sent at")
+        if not age_text or not sent_text:
+            await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
+            return
 
-    # ไม่ระบุอายุ
-    if is_age_undisclosed(str(age_text)):
-        new_age_role = ctx.guild.get_role(ROLE_AGE_UNDISCLOSED)
+        # ไม่ระบุอายุ
+        if is_age_undisclosed(str(age_text)):
+            new_age_role = ctx.guild.get_role(ROLE_AGE_UNDISCLOSED)
+            to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
+            if to_remove:
+                try:
+                    await member.remove_roles(*to_remove, reason="Refresh age → undisclosed")
+                except discord.Forbidden:
+                    await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
+                    return
+            if new_age_role and new_age_role not in member.roles:
+                try:
+                    await member.add_roles(new_age_role, reason="Refresh age → undisclosed")
+                except discord.Forbidden:
+                    await ctx.send("⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: ไม่ระบุอายุ")
+                    return
+            got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
+            await ctx.send(f"✅ ตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว (ผู้ใช้เลือกไม่ระบุอายุ)")
+            return
+
+        # เดิม: คำนวณอายุจากตัวเลข
+        try:
+            old_age = int(str(age_text).strip())
+        except ValueError:
+            await ctx.send("❌ รูปแบบอายุเดิมใน embed ไม่ใช่ตัวเลข")
+            return
+
+        sent_dt = _parse_sent_at(sent_text)
+        if not sent_dt:
+            await ctx.send("❌ รูปแบบเวลา 'Sent at' ไม่ถูกต้อง (ต้องเป็น dd/mm/YYYY HH:MM)")
+            return
+
+        now = datetime.now(timezone(timedelta(hours=7)))
+        added_years = _years_between(sent_dt, now)
+        new_age = max(old_age + added_years, 0)
+
+        new_age_role_id = resolve_age_role_id(str(new_age))
+        new_age_role = ctx.guild.get_role(new_age_role_id) if new_age_role_id else None
+
         to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
         if to_remove:
             try:
-                await member.remove_roles(*to_remove, reason="Refresh age → undisclosed")
+                await member.remove_roles(*to_remove, reason=f"Refresh age → now {new_age}")
             except discord.Forbidden:
                 await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
                 return
-        if new_age_role and new_age_role not in member.roles:
+
+        if new_age_role:
             try:
-                await member.add_roles(new_age_role, reason="Refresh age → undisclosed")
+                await member.add_roles(new_age_role, reason=f"Refresh age → now {new_age}")
             except discord.Forbidden:
-                await ctx.send("⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: ไม่ระบุอายุ")
+                await ctx.send(f"⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: {new_age_role.name}")
                 return
+
         got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
-        await ctx.send(f"✅ ตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว (ผู้ใช้เลือกไม่ระบุอายุ)")
-        return
-
-    # เดิม: คำนวณอายุจากตัวเลข
-    try:
-        old_age = int(str(age_text).strip())
-    except ValueError:
-        await ctx.send("❌ รูปแบบอายุเดิมใน embed ไม่ใช่ตัวเลข")
-        return
-
-    sent_dt = _parse_sent_at(sent_text)
-    if not sent_dt:
-        await ctx.send("❌ รูปแบบเวลา 'Sent at' ไม่ถูกต้อง (ต้องเป็น dd/mm/YYYY HH:MM)")
-        return
-
-    now = datetime.now(timezone(timedelta(hours=7)))
-    added_years = _years_between(sent_dt, now)
-    new_age = max(old_age + added_years, 0)
-
-    new_age_role_id = resolve_age_role_id(str(new_age))
-    new_age_role = ctx.guild.get_role(new_age_role_id) if new_age_role_id else None
-
-    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
-    if to_remove:
-        try:
-            await member.remove_roles(*to_remove, reason=f"Refresh age → now {new_age}")
-        except discord.Forbidden:
-            await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
-            return
-
-    if new_age_role:
-        try:
-            await member.add_roles(new_age_role, reason=f"Refresh age → now {new_age}")
-        except discord.Forbidden:
-            await ctx.send(f"⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: {new_age_role.name}")
-            return
-
-    got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
-    await ctx.send(f"✅ อัปเดตอายุเป็น **{new_age}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
+        await ctx.send(f"✅ อัปเดตอายุเป็น **{new_age}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
+    except discord.HTTPException:
+        logger.exception("refresh_age HTTP error")
+        await ctx.send("❌ เกิดข้อผิดพลาด HTTP")
+    except Exception:
+        logger.exception("refresh_age crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 # ---------- All users refresh ----------
 @bot.command(name="refresh_age_all")
 @commands.has_permissions(administrator=True)
 async def refresh_age_all(ctx):
-    await ctx.send("⏳ กำลังรีเฟรชอายุทั้งเซิร์ฟเวอร์และบันทึก log ...")
-    await _run_full_age_refresh(ctx.guild)
-    await ctx.send("✅ เสร็จสิ้น (ดูรายละเอียดในห้อง log)")
+    try:
+        await ctx.send("⏳ กำลังรีเฟรชอายุทั้งเซิร์ฟเวอร์และบันทึก log ...")
+        await _run_full_age_refresh(ctx.guild)
+        await ctx.send("✅ เสร็จสิ้น (ดูรายละเอียดในห้อง log)")
+    except discord.HTTPException:
+        logger.exception("refresh_age_all HTTP error")
+        await ctx.send("❌ เกิดข้อผิดพลาด HTTP")
+    except Exception:
+        logger.exception("refresh_age_all crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 # ====== Admin adjust commands ======
 CLEAR_ALIASES = {"clear", "reset", "remove", "none", "no", "x", "-", "—", "ลบ", "เอาออก", "ไม่ใช้", "ไม่ใส่", "ไม่ต้อง"}
@@ -912,149 +1015,142 @@ def _bot_can_edit_member_and_role(ctx: commands.Context, member: discord.Member,
 @bot.command(name="setnick", aliases=["nick", "ชื่อเล่น", "ปรับชื่อเล่น"])
 @commands.has_permissions(manage_nicknames=True)
 async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: str):
-    """
-    ปรับ 'วงเล็บชื่อเล่น' ต่อท้ายชื่อดิสคอร์ดของสมาชิก
-    - ส่งคำว่า clear/reset/remove/ลบ/เอาออก (หรือเครื่องหมาย -) เพื่อเอาวงเล็บออก
-    - ถ้าส่งชื่อเล่น: จะอัปเดตวงเล็บให้เป็นชื่อนั้น (ใช้ build_parenthesized_nick)
-    """
-    ok, msg = _bot_can_edit_member_and_role(ctx, member, None)
-    if not ok:
-        await ctx.send(msg)
-        return
+    try:
+        ok, msg = _bot_can_edit_member_and_role(ctx, member, None)
+        if not ok:
+            await ctx.send(msg)
+            return
 
-    want_clear = (_norm_simple(nickname) in CLEAR_ALIASES) or (nickname.strip() == "")
-    if want_clear:
-        base = _base_display_name(member)
+        want_clear = (_norm_simple(nickname) in CLEAR_ALIASES) or (nickname.strip() == "")
+        if want_clear:
+            base = _base_display_name(member)
+            try:
+                await member.edit(nick=base, reason="Admin: clear form nickname")
+                await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{base}` (เป้าหมาย: {member.mention})")
+            except discord.Forbidden:
+                await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้"); return
+            except discord.HTTPException:
+                await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ"); return
+
+            updated = await _update_approval_embed_for_member(ctx.guild, member, nickname="ไม่ระบุ")
+            if not updated:
+                await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+            return
+
+        # validate ชื่อเล่น
+        if len(nickname) < 2 or len(nickname) > 32 or any(ch.isdigit() for ch in nickname) \
+           or any(c in INVALID_CHARS for c in nickname) or contains_emoji(nickname):
+            await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
+            return
+        if _canon_full(nickname) in _discord_names_set(member):
+            await ctx.send("❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของเป้าหมายจริง ๆ")
+            return
+
+        new_nick = build_parenthesized_nick(member, nickname)
         try:
-            await member.edit(nick=base, reason="Admin: clear form nickname")
-            await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{base}` (เป้าหมาย: {member.mention})")
+            await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nickname}")
+            await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}")
         except discord.Forbidden:
             await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้"); return
         except discord.HTTPException:
             await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ"); return
 
-        # อัปเดต embed ให้เป็น "ไม่ระบุ"
-        updated = await _update_approval_embed_for_member(ctx.guild, member, nickname="ไม่ระบุ")
+        updated = await _update_approval_embed_for_member(ctx.guild, member, nickname=nickname)
         if not updated:
             await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
-        return
-
-    # validate ชื่อเล่น
-    if len(nickname) < 2 or len(nickname) > 32 or any(ch.isdigit() for ch in nickname) \
-       or any(c in INVALID_CHARS for c in nickname) or contains_emoji(nickname):
-        await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
-        return
-    if _canon_full(nickname) in _discord_names_set(member):
-        await ctx.send("❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของเป้าหมายจริง ๆ")
-        return
-
-    new_nick = build_parenthesized_nick(member, nickname)
-    try:
-        await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nickname}")
-        await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}")
-    except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้"); return
-    except discord.HTTPException:
-        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ"); return
-
-    # อัปเดต embed ให้โชว์ชื่อเล่นใหม่
-    updated = await _update_approval_embed_for_member(ctx.guild, member, nickname=nickname)
-    if not updated:
-        await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+    except Exception:
+        logger.exception("setnick crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 @bot.command(name="setgender", aliases=["gender", "เพศ", "ปรับเพศ"])
 @commands.has_permissions(manage_roles=True)
 async def setgender(ctx: commands.Context, member: discord.Member, *, gender_text: str = ""):
-    """
-    ปรับยศ 'เพศ' ของสมาชิก
-    - รับค่าได้ทั้ง ชาย/หญิง/LGBT/ไม่ระบุ และคำพ้อง (ไทย/อังกฤษ) ที่เรารองรับ
-    - ถ้าเว้นว่าง → จะตีความเป็น 'ไม่ระบุ'
-    """
-    role_id = resolve_gender_role_id(gender_text)
-    role = ctx.guild.get_role(role_id)
-    if not role:
-        await ctx.send("❌ ไม่พบ role เพศที่แมปไว้ในกิลด์นี้")
-        return
-
-    ok, msg = _bot_can_edit_member_and_role(ctx, member, role)
-    if not ok:
-        await ctx.send(msg)
-        return
-    if not ctx.guild.me.guild_permissions.manage_roles:
-        await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
-        return
-
-    to_remove = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and r.id != role.id]
     try:
-        if to_remove:
-            await member.remove_roles(*to_remove, reason="Admin: set gender (enforce single gender role)")
-        if role not in member.roles:
-            await member.add_roles(role, reason="Admin: set gender")
-    except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศเพศให้สมาชิกคนนี้"); return
-    except discord.HTTPException:
-        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศเพศ"); return
+        role_id = resolve_gender_role_id(gender_text)
+        role = ctx.guild.get_role(role_id)
+        if not role:
+            await ctx.send("❌ ไม่พบ role เพศที่แมปไว้ในกิลด์นี้")
+            return
 
-    removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
-    await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+        ok, msg = _bot_can_edit_member_and_role(ctx, member, role)
+        if not ok:
+            await ctx.send(msg)
+            return
+        if not ctx.guild.me.guild_permissions.manage_roles:
+            await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
+            return
 
-    # อัปเดต embed (ใช้ชื่อ role เป็นค่าที่แสดง)
-    updated = await _update_approval_embed_for_member(ctx.guild, member, gender=role.name)
-    if not updated:
-        await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+        to_remove = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and r.id != role.id]
+        try:
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Admin: set gender (enforce single gender role)")
+            if role not in member.roles:
+                await member.add_roles(role, reason="Admin: set gender")
+        except discord.Forbidden:
+            await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศเพศให้สมาชิกคนนี้"); return
+        except discord.HTTPException:
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศเพศ"); return
+
+        removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
+        await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+
+        updated = await _update_approval_embed_for_member(ctx.guild, member, gender=role.name)
+        if not updated:
+            await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+    except Exception:
+        logger.exception("setgender crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 @bot.command(name="setage", aliases=["age", "อายุ", "ปรับอายุ"])
 @commands.has_permissions(manage_roles=True)
 async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str):
-    """
-    ปรับยศ 'อายุ' ของสมาชิก
-    - ส่งตัวเลข 0–200 → จัดเข้าช่วงอายุอัตโนมัติ
-    - ส่งคำอย่าง ไม่ระบุ/undisclosed/n-a/- → ตั้งเป็นยศ 'อายุไม่ระบุ'
-    - ส่ง 'clear'/'ลบ' → ตั้งเป็น 'อายุไม่ระบุ' เช่นกัน
-    """
-    if _norm_simple(age_text) in CLEAR_ALIASES or not age_text.strip():
-        age_text = "ไม่ระบุ"
-
-    role_id = resolve_age_role_id(age_text)
-    if not role_id:
-        await ctx.send("❌ อายุไม่ถูกต้อง (ใส่เป็นตัวเลข 0–200 หรือ 'ไม่ระบุ')")
-        return
-    role = ctx.guild.get_role(role_id)
-    if not role:
-        await ctx.send("❌ ไม่พบ role อายุที่แมปไว้ในกิลด์นี้")
-        return
-
-    ok, msg = _bot_can_edit_member_and_role(ctx, member, role)
-    if not ok:
-        await ctx.send(msg)
-        return
-    if not ctx.guild.me.guild_permissions.manage_roles:
-        await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
-        return
-
-    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != role.id]
     try:
-        if to_remove:
-            await member.remove_roles(*to_remove, reason="Admin: set age (enforce single age role)")
-        if role not in member.roles:
-            await member.add_roles(role, reason="Admin: set age")
-    except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศอายุให้สมาชิกคนนี้"); return
-    except discord.HTTPException:
-        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศอายุ"); return
+        if _norm_simple(age_text) in CLEAR_ALIASES or not age_text.strip():
+            age_text = "ไม่ระบุ"
 
-    removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
-    await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+        role_id = resolve_age_role_id(age_text)
+        if not role_id:
+            await ctx.send("❌ อายุไม่ถูกต้อง (ใส่เป็นตัวเลข 0–200 หรือ 'ไม่ระบุ')")
+            return
+        role = ctx.guild.get_role(role_id)
+        if not role:
+            await ctx.send("❌ ไม่พบ role อายุที่แมปไว้ในกิลด์นี้")
+            return
 
-    # อัปเดต embed
-    if role.id == ROLE_AGE_UNDISCLOSED:
-        disp_age = "ไม่ระบุ"
-    else:
-        m = re.search(r"\d{1,3}", age_text)
-        disp_age = m.group(0) if m else age_text.strip()
-    updated = await _update_approval_embed_for_member(ctx.guild, member, age=disp_age)
-    if not updated:
-        await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+        ok, msg = _bot_can_edit_member_and_role(ctx, member, role)
+        if not ok:
+            await ctx.send(msg)
+            return
+        if not ctx.guild.me.guild_permissions.manage_roles:
+            await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
+            return
+
+        to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != role.id]
+        try:
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Admin: set age (enforce single age role)")
+            if role not in member.roles:
+                await member.add_roles(role, reason="Admin: set age")
+        except discord.Forbidden:
+            await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศอายุให้สมาชิกคนนี้"); return
+        except discord.HTTPException:
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศอายุ"); return
+
+        removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
+        await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+
+        # อัปเดต embed
+        if role.id == ROLE_AGE_UNDISCLOSED:
+            disp_age = "ไม่ระบุ"
+        else:
+            m = re.search(r"\d{1,3}", age_text)
+            disp_age = m.group(0) if m else age_text.strip()
+        updated = await _update_approval_embed_for_member(ctx.guild, member, age=disp_age)
+        if not updated:
+            await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+    except Exception:
+        logger.exception("setage crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 # ====== Help command (list & details) ======
 try:
@@ -1127,52 +1223,56 @@ def _fmt_cmd_list(prefix: str, names: list[str]) -> str:
 
 @bot.command(name="help", aliases=["commands", "คำสั่ง", "วิธีใช้"])
 async def help_command(ctx: commands.Context, *, command_name: str = None):
-    prefix = ctx.prefix or "$"
+    try:
+        prefix = ctx.prefix or "$"
 
-    if command_name:
-        cmd = bot.get_command(command_name.lower())
-        if not cmd:
-            await ctx.send(f"❌ ไม่พบคำสั่งชื่อ `{command_name}`")
+        if command_name:
+            cmd = bot.get_command(command_name.lower())
+            if not cmd:
+                await ctx.send(f"❌ ไม่พบคำสั่งชื่อ `{command_name}`")
+                return
+
+            name = cmd.name
+            desc_short = _SHORT_DESC.get(name, cmd.help or "-")
+            detail = _HELP_DETAILS.get(name, {})
+            usage = detail.get("usage", f"{prefix}{name} …")
+            example = detail.get("example", "-")
+            note = detail.get("note", None)
+
+            aliases = ", ".join(cmd.aliases) if getattr(cmd, "aliases", None) else "—"
+            is_admin = "✅ ผู้ใช้ทั่วไป" if name not in _ADMIN_COMMANDS else "🛡️ ผู้ดูแล (ต้องมีสิทธิ์ที่เกี่ยวข้อง)"
+
+            embed = discord.Embed(
+                title=f"ℹ️ วิธีใช้คำสั่ง: {prefix}{name}",
+                description=desc_short,
+                color=discord.Color.blurple()
+            )
+            embed.add_field(name="การใช้งาน", value=f"`{usage}`", inline=False)
+            embed.add_field(name="ตัวอย่าง", value=f"```\n{example}\n```", inline=False)
+            embed.add_field(name="Aliases", value=aliases, inline=True)
+            embed.add_field(name="สิทธิ์ที่ต้องใช้", value=is_admin, inline=True)
+            if note:
+                embed.add_field(name="หมายเหตุ", value=note, inline=False)
+
+            await ctx.send(embed=embed)
             return
 
-        name = cmd.name
-        desc_short = _SHORT_DESC.get(name, cmd.help or "-")
-        detail = _HELP_DETAILS.get(name, {})
-        usage = detail.get("usage", f"{prefix}{name} …")
-        example = detail.get("example", "-")
-        note = detail.get("note", None)
-
-        aliases = ", ".join(cmd.aliases) if getattr(cmd, "aliases", None) else "—"
-        is_admin = "✅ ผู้ใช้ทั่วไป" if name not in _ADMIN_COMMANDS else "🛡️ ผู้ดูแล (ต้องมีสิทธิ์ที่เกี่ยวข้อง)"
+        all_cmds = {c.name for c in bot.commands if not c.hidden}
+        general = sorted(all_cmds - _ADMIN_COMMANDS | {"help"})
+        admin = sorted(all_cmds & _ADMIN_COMMANDS)
 
         embed = discord.Embed(
-            title=f"ℹ️ วิธีใช้คำสั่ง: {prefix}{name}",
-            description=desc_short,
-            color=discord.Color.blurple()
+            title="📜 รายการคำสั่งทั้งหมด",
+            description=f"พิมพ์ `{prefix}help <คำสั่ง>` เพื่อดูวิธีใช้แบบละเอียด",
+            color=discord.Color.green()
         )
-        embed.add_field(name="การใช้งาน", value=f"`{usage}`", inline=False)
-        embed.add_field(name="ตัวอย่าง", value=f"```\n{example}\n```", inline=False)
-        embed.add_field(name="Aliases", value=aliases, inline=True)
-        embed.add_field(name="สิทธิ์ที่ต้องใช้", value=is_admin, inline=True)
-        if note:
-            embed.add_field(name="หมายเหตุ", value=note, inline=False)
+        embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(prefix, general), inline=False)
+        embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(prefix, admin), inline=False)
 
         await ctx.send(embed=embed)
-        return
-
-    all_cmds = {c.name for c in bot.commands if not c.hidden}
-    general = sorted(all_cmds - _ADMIN_COMMANDS | {"help"})
-    admin = sorted(all_cmds & _ADMIN_COMMANDS)
-
-    embed = discord.Embed(
-        title="📜 รายการคำสั่งทั้งหมด",
-        description=f"พิมพ์ `{prefix}help <คำสั่ง>` เพื่อดูวิธีใช้แบบละเอียด",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(prefix, general), inline=False)
-    embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(prefix, admin), inline=False)
-
-    await ctx.send(embed=embed)
+    except Exception:
+        logger.exception("help_command crashed")
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิด")
 
 # ====== AUTO REFRESH DAEMON (configurable) ======
 def _refresh_period_tag(now_local: datetime, freq: str) -> str:
@@ -1195,7 +1295,7 @@ async def _already_ran_this_period(log_ch: discord.TextChannel, tz: timezone, fr
             if m.author == bot.user and m.content and tag in m.content:
                 return True
     except Exception:
-        pass
+        logger.exception("history read failed in _already_ran_this_period")
     return False
 
 def _last_day_of_month(year: int, month: int) -> int:
@@ -1238,7 +1338,6 @@ def _compute_next_run_local(now_local: datetime) -> datetime:
         return target
 
     if freq == "WEEKLY":
-        # หาวัน REFRESH_AT_WEEKDAY ของสัปดาห์ถัดไป/นี้
         weekday = max(0, min(6, REFRESH_AT_WEEKDAY))
         days_ahead = (weekday - now_local.weekday()) % 7
         target = (now_local + timedelta(days=days_ahead)).replace(hour=h, minute=mi, second=0, microsecond=0)
@@ -1246,7 +1345,6 @@ def _compute_next_run_local(now_local: datetime) -> datetime:
             target = target + timedelta(days=7)
         return target
 
-    # DAILY
     target = now_local.replace(hour=h, minute=mi, second=0, microsecond=0)
     if now_local >= target:
         target = target + timedelta(days=1)
@@ -1258,37 +1356,75 @@ async def _auto_refresh_daemon():
     tz = REFRESH_TZ
     await bot.wait_until_ready()
     while not bot.is_closed():
-        now_utc = datetime.now(timezone.utc)
-        now_local = now_utc.astimezone(tz)
-        target_local = _compute_next_run_local(now_local)
-        target_utc = target_local.astimezone(timezone.utc)
-        sleep_sec = max(1, int((target_utc - now_utc).total_seconds()))
         try:
+            now_utc = datetime.now(timezone.utc)
+            now_local = now_utc.astimezone(tz)
+            target_local = _compute_next_run_local(now_local)
+            target_utc = target_local.astimezone(timezone.utc)
+            sleep_sec = max(1, int((target_utc - now_utc).total_seconds()))
             await asyncio.sleep(sleep_sec)
+
+            for guild in bot.guilds:
+                try:
+                    log_ch = guild.get_channel(LOG_CHANNEL_ID)
+                    if not log_ch:
+                        continue
+                    if await _already_ran_this_period(log_ch, tz, REFRESH_FREQUENCY):
+                        continue
+                    await _run_full_age_refresh(guild)
+                    await log_ch.send(_refresh_period_tag(datetime.now(tz), REFRESH_FREQUENCY) + " ✅ DONE", allowed_mentions=SAFE_MENTIONS)
+                except Exception:
+                    logger.exception("auto refresh failed for guild=%s", getattr(guild, "id", None))
         except asyncio.CancelledError:
             return
-
-        try:
-            for guild in bot.guilds:
-                log_ch = guild.get_channel(LOG_CHANNEL_ID)
-                if not log_ch:
-                    continue
-                if await _already_ran_this_period(log_ch, tz, REFRESH_FREQUENCY):
-                    continue
-                await _run_full_age_refresh(guild)
-                await log_ch.send(_refresh_period_tag(datetime.now(tz), REFRESH_FREQUENCY) + " ✅ DONE")
         except Exception:
-            # กัน daemon ล้ม
-            pass
+            logger.exception("auto refresh loop crashed (will continue)")
+
+# ====== Global error handlers ======
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    try:
+        # เปิดเผยข้อความที่เข้าใจง่ายให้ผู้ใช้ และ log รายละเอียดไว้
+        if isinstance(error, commands.CommandNotFound):
+            return  # เงียบ ๆ หรือจะบอกก็ได้: await ctx.send("❌ ไม่พบคำสั่งนั้น")
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"❌ คำสั่งไม่ครบอาร์กิวเมนต์: `{error.param.name}`"); return
+        if isinstance(error, commands.BadArgument):
+            await ctx.send("❌ อาร์กิวเมนต์ไม่ถูกต้อง (รูปแบบไม่ตรง)"); return
+        if isinstance(error, commands.MemberNotFound):
+            await ctx.send("❌ ไม่พบสมาชิกที่ระบุ"); return
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("❌ คุณไม่มีสิทธิ์ใช้คำสั่งนี้"); return
+        if isinstance(error, commands.BotMissingPermissions):
+            await ctx.send("❌ บอทไม่มีสิทธิ์เพียงพอสำหรับคำสั่งนี้"); return
+        if isinstance(error, commands.CheckFailure):
+            await ctx.send("❌ ไม่ผ่านเงื่อนไขการใช้งานคำสั่งนี้"); return
+        # ไม่รู้ประเภท → แจ้งสั้น ๆ + log เต็ม
+        await ctx.send("❌ เกิดข้อผิดพลาดไม่คาดคิดระหว่างรันคำสั่ง")
+        logger.exception("on_command_error: %r", error)
+    except Exception:
+        logger.exception("on_command_error handler crashed")
+
+@bot.event
+async def on_error(event_method: str, *args, **kwargs):
+    # จับ error จาก event อื่น ๆ ที่ไม่ได้ถูก try/except ไว้
+    logger.exception("on_error in event=%s", event_method)
 
 # ====== Persistent View Loader ======
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    bot.add_view(VerificationView())
-    if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
-        bot.loop.create_task(_auto_refresh_daemon())
-        bot._age_refresh_daemon_started = True
+    try:
+        logger.info("Logged in as %s", bot.user)
+        bot.add_view(VerificationView())
+        if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
+            bot.loop.create_task(_auto_refresh_daemon())
+            bot._age_refresh_daemon_started = True
+    except Exception:
+        logger.exception("on_ready failed")
 
 # ====== Run bot ======
-bot.run(os.getenv("DISCORD_BOT_TOKEN"))
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_BOT_TOKEN")
+    if not token:
+        logger.error("DISCORD_BOT_TOKEN ENV NOT SET")
+    bot.run(token)

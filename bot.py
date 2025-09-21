@@ -709,6 +709,7 @@ class ApproveRejectView(discord.ui.View):
             pass
 
 # ====== Commands ======
+# ====== Commands ======
 @bot.command(name="verify_embed")
 @commands.has_permissions(administrator=True)
 async def verify_embed(ctx):
@@ -772,6 +773,7 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send("❌ ข้อมูลใน embed ไม่ครบ (Age หรือ Sent at หาย)")
         return
 
+    # ไม่ระบุอายุ
     if is_age_undisclosed(str(age_text)):
         new_age_role = ctx.guild.get_role(ROLE_AGE_UNDISCLOSED)
         to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
@@ -791,6 +793,7 @@ async def refresh_age(ctx, member: discord.Member):
         await ctx.send(f"✅ ตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว (ผู้ใช้เลือกไม่ระบุอายุ)")
         return
 
+    # เดิม: คำนวณอายุจากตัวเลข
     try:
         old_age = int(str(age_text).strip())
     except ValueError:
@@ -834,6 +837,296 @@ async def refresh_age_all(ctx):
     await ctx.send("⏳ กำลังรีเฟรชอายุทั้งเซิร์ฟเวอร์และบันทึก log ...")
     await _run_full_age_refresh(ctx.guild)
     await ctx.send("✅ เสร็จสิ้น (ดูรายละเอียดในห้อง log)")
+
+# ====== Admin adjust commands ======
+CLEAR_ALIASES = {"clear", "reset", "remove", "none", "no", "x", "-", "—", "ลบ", "เอาออก", "ไม่ใช้", "ไม่ใส่", "ไม่ต้อง"}
+
+def _bot_can_edit_member_and_role(ctx: commands.Context, member: discord.Member, role: discord.Role | None = None) -> tuple[bool, str]:
+    """เช็คสิทธิ์บอท/ลำดับยศให้เคสแก้ชื่อ/ให้-ถอดยศ"""
+    bot_me = ctx.guild.me
+    if not bot_me:
+        return False, "❌ ไม่พบสถานะของบอทในกิลด์"
+    # เป้าหมาย: ต้องอยู่ใต้บอท
+    if bot_me.top_role <= member.top_role or member.id == ctx.guild.owner_id:
+        return False, "❌ บอทไม่มีลำดับยศสูงพอที่จะจัดการสมาชิกคนนี้"
+    # ถ้ามีเป้าหมายเป็น role: บอทต้องสูงกว่า role ด้วย
+    if role and bot_me.top_role <= role:
+        return False, f"❌ บอทไม่มีลำดับยศสูงพอที่จะจัดการยศ: {role.name}"
+    return True, ""
+
+@bot.command(name="setnick", aliases=["nick", "ชื่อเล่น", "ปรับชื่อเล่น"])
+@commands.has_permissions(manage_nicknames=True)
+async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: str):
+    """
+    ปรับ 'วงเล็บชื่อเล่น' ต่อท้ายชื่อดิสคอร์ดของสมาชิก
+    - ส่งคำว่า clear/reset/remove/ลบ/เอาออก (หรือเครื่องหมาย -) เพื่อเอาวงเล็บออก
+    - ถ้าส่งชื่อเล่น: จะอัปเดตวงเล็บให้เป็นชื่อนั้น (ใช้ build_parenthesized_nick)
+    """
+    ok, msg = _bot_can_edit_member_and_role(ctx, member, None)
+    if not ok:
+        await ctx.send(msg)
+        return
+
+    want_clear = (_norm_simple(nickname) in CLEAR_ALIASES) or (nickname.strip() == "")
+    if want_clear:
+        base = _base_display_name(member)  # ตัดวงเล็บเดิม (ถ้ามี)
+        new_nick = base
+        if (member.nick or base) == new_nick:
+            await ctx.send(f"ℹ️ {member.mention} ไม่มีวงเล็บชื่อเล่นอยู่แล้ว")
+            return
+        try:
+            await member.edit(nick=new_nick, reason="Admin: clear form nickname")
+            await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{new_nick}` (เป้าหมาย: {member.mention})")
+        except discord.Forbidden:
+            await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้")
+        except discord.HTTPException:
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ")
+        return
+
+    # Validate ชื่อเล่น (ถ้าไม่ใช่โหมด clear)
+    if len(nickname) < 2 or len(nickname) > 32 or any(ch.isdigit() for ch in nickname) \
+       or any(c in INVALID_CHARS for c in nickname) or contains_emoji(nickname):
+        await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
+        return
+    # กันกรณีชื่อเล่นเหมือนชื่อดิส (ดัดรูปแบบก็ไม่ผ่าน)
+    if _canon_full(nickname) in _discord_names_set(member):
+        await ctx.send("❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของเป้าหมายจริง ๆ")
+        return
+
+    new_nick = build_parenthesized_nick(member, nickname)
+    if (member.nick or "") == new_nick:
+        await ctx.send("ℹ️ ไม่ได้เปลี่ยน เพราะได้ชื่อเดิมอยู่แล้ว")
+        return
+
+    try:
+        await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nickname}")
+        await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}")
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้")
+    except discord.HTTPException:
+        await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ")
+
+@bot.command(name="setgender", aliases=["gender", "เพศ", "ปรับเพศ"])
+@commands.has_permissions(manage_roles=True)
+async def setgender(ctx: commands.Context, member: discord.Member, *, gender_text: str = ""):
+    """
+    ปรับยศ 'เพศ' ของสมาชิก
+    - รับค่าได้ทั้ง ชาย/หญิง/LGBT/ไม่ระบุ และคำพ้อง (ไทย/อังกฤษ) ที่เรารองรับ
+    - ถ้าเว้นว่าง → จะตีความเป็น 'ไม่ระบุ'
+    """
+    role_id = resolve_gender_role_id(gender_text)
+    role = ctx.guild.get_role(role_id)
+    if not role:
+        await ctx.send("❌ ไม่พบ role เพศที่แมปไว้ในกิลด์นี้")
+        return
+
+    ok, msg = _bot_can_edit_member_and_role(ctx, member, role)
+    if not ok:
+        await ctx.send(msg)
+        return
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
+        return
+
+    # ถอดเพศเดิมทั้งหมด (ยกเว้นอันที่จะใส่)
+    to_remove = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and r.id != role.id]
+    try:
+        if to_remove:
+            await member.remove_roles(*to_remove, reason="Admin: set gender (enforce single gender role)")
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ถอดยศเพศเดิมของสมาชิกคนนี้")
+        return
+
+    if role not in member.roles:
+        try:
+            await member.add_roles(role, reason="Admin: set gender")
+        except discord.Forbidden:
+            await ctx.send("❌ บอทไม่มีสิทธิ์เพิ่มยศเพศให้สมาชิกคนนี้")
+            return
+        except discord.HTTPException:
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนเพิ่มยศเพศ")
+            return
+
+    removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
+    await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+
+@bot.command(name="setage", aliases=["age", "อายุ", "ปรับอายุ"])
+@commands.has_permissions(manage_roles=True)
+async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str):
+    """
+    ปรับยศ 'อายุ' ของสมาชิก
+    - ส่งตัวเลข 0–200 → จัดเข้าช่วงอายุอัตโนมัติ
+    - ส่งคำอย่าง ไม่ระบุ/undisclosed/n-a/- → ตั้งเป็นยศ 'อายุไม่ระบุ'
+    - ส่ง 'clear'/'ลบ' → ตั้งเป็น 'อายุไม่ระบุ' เช่นกัน
+    """
+    # แปลง clear เป็น 'ไม่ระบุ'
+    if _norm_simple(age_text) in CLEAR_ALIASES or not age_text.strip():
+        age_text = "ไม่ระบุ"
+
+    role_id = resolve_age_role_id(age_text)
+    if not role_id:
+        await ctx.send("❌ อายุไม่ถูกต้อง (ใส่เป็นตัวเลข 0–200 หรือ 'ไม่ระบุ')")
+        return
+    role = ctx.guild.get_role(role_id)
+    if not role:
+        await ctx.send("❌ ไม่พบ role อายุที่แมปไว้ในกิลด์นี้")
+        return
+
+    ok, msg = _bot_can_edit_member_and_role(ctx, member, role)
+    if not ok:
+        await ctx.send(msg)
+        return
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles")
+        return
+
+    # ถอดอายุเดิมทั้งหมด (ยกเว้นอันที่จะใส่)
+    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != role.id]
+    try:
+        if to_remove:
+            await member.remove_roles(*to_remove, reason="Admin: set age (enforce single age role)")
+    except discord.Forbidden:
+        await ctx.send("❌ บอทไม่มีสิทธิ์ถอดยศอายุเดิมของสมาชิกคนนี้")
+        return
+
+    if role not in member.roles:
+        try:
+            await member.add_roles(role, reason="Admin: set age")
+        except discord.Forbidden:
+            await ctx.send("❌ บอทไม่มีสิทธิ์เพิ่มยศอายุให้สมาชิกคนนี้")
+            return
+        except discord.HTTPException:
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนเพิ่มยศอายุ")
+            return
+
+    removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
+    await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+
+# ====== Help command (list & details) ======
+try:
+    bot.remove_command("help")  # เอา default help ของ discord.py ออก เพื่อใช้ของเรา
+except Exception:
+    pass
+
+# คำอธิบายสั้น (แสดงในรายการรวม)
+_SHORT_DESC = {
+    "help": "แสดงรายการคำสั่งทั้งหมด หรือรายละเอียดของคำสั่งที่ระบุ",
+    "verify_embed": "ส่ง Embed ปุ่มยืนยันตัวตนไปยังห้อง VERIFY_CHANNEL_ID",
+    "userinfo": "แสดงข้อมูลยืนยันล่าสุดของสมาชิกจากห้องอนุมัติ",
+    "refresh_age": "อัปเดตยศอายุตามเวลาที่ผ่านไป (รายบุคคล)",
+    "refresh_age_all": "อัปเดตยศอายุทั้งเซิร์ฟเวอร์ตาม logs",
+    "setnick": "ตั้ง/ลบ วงเล็บชื่อเล่น ต่อท้ายชื่อดิสของสมาชิก",
+    "setgender": "ตั้งยศเพศ (ชาย/หญิง/LGBT/ไม่ระบุ)",
+    "setage": "ตั้งยศอายุ (กรอกตัวเลขหรือ 'ไม่ระบุ')",
+}
+
+# รายละเอียดเชิงลึก (แสดงเมื่อพิมพ์ $help <command>)
+_HELP_DETAILS = {
+    "help": {
+        "usage": "$help [ชื่อคำสั่ง]",
+        "example": "$help setage",
+        "note": "ไม่ใส่อาร์กิวเมนต์จะโชว์รายการคำสั่งทั้งหมด",
+    },
+    "verify_embed": {
+        "usage": "$verify_embed",
+        "example": "$verify_embed",
+        "note": "ต้องมีสิทธิ์ Administrator",
+    },
+    "userinfo": {
+        "usage": "$userinfo @สมาชิก",
+        "example": "$userinfo @Alice",
+        "note": "ดึง embed คำขอยืนยันล่าสุดจากห้องอนุมัติ",
+    },
+    "refresh_age": {
+        "usage": "$refresh_age @สมาชิก",
+        "example": "$refresh_age @Alice",
+        "note": "คำนวณอัตโนมัติจากเวลาในฟิลด์ 'Sent at' ของ embed",
+    },
+    "refresh_age_all": {
+        "usage": "$refresh_age_all",
+        "example": "$refresh_age_all",
+        "note": "รันทั้งเซิร์ฟเวอร์และส่งผลลัพธ์ไปห้อง log",
+    },
+    "setnick": {
+        "usage": "$setnick @สมาชิก <ชื่อเล่น|clear>",
+        "example": "$setnick @Alice มินนี่\n$setnick @Alice clear",
+        "note": "ต้อง Manage Nicknames; ใช้ clear/reset/remove/ลบ เพื่อลบวงเล็บ",
+    },
+    "setgender": {
+        "usage": "$setgender @สมาชิก [เพศ]",
+        "example": "$setgender @Alice หญิง\n$setgender @Bob ไม่ระบุ",
+        "note": "ต้อง Manage Roles; เว้นว่าง = ไม่ระบุ",
+    },
+    "setage": {
+        "usage": "$setage @สมาชิก <อายุ|ไม่ระบุ|clear>",
+        "example": "$setage @Alice 21\n$setage @Bob ไม่ระบุ\n$setage @Bob clear",
+        "note": "ต้อง Manage Roles; ตัวเลขจัดเข้าช่วงอายุอัตโนมัติ",
+    },
+}
+
+_ADMIN_COMMANDS = {
+    "verify_embed", "userinfo", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage"
+}
+
+def _fmt_cmd_list(prefix: str, names: list[str]) -> str:
+    lines = []
+    for n in names:
+        desc = _SHORT_DESC.get(n, "-")
+        lines.append(f"• **{prefix}{n}** — {desc}")
+    return "\n".join(lines) if lines else "—"
+
+@bot.command(name="help", aliases=["commands", "คำสั่ง", "วิธีใช้"])
+async def help_command(ctx: commands.Context, *, command_name: str = None):
+    prefix = ctx.prefix or "$"
+
+    if command_name:
+        # รายละเอียดรายคำสั่ง
+        cmd = bot.get_command(command_name.lower())
+        if not cmd:
+            await ctx.send(f"❌ ไม่พบคำสั่งชื่อ `{command_name}`")
+            return
+
+        name = cmd.name
+        desc_short = _SHORT_DESC.get(name, cmd.help or "-")
+        detail = _HELP_DETAILS.get(name, {})
+        usage = detail.get("usage", f"{prefix}{name} …")
+        example = detail.get("example", "-")
+        note = detail.get("note", None)
+
+        # รวม aliases (ถ้ามี)
+        aliases = ", ".join(cmd.aliases) if getattr(cmd, "aliases", None) else "—"
+        is_admin = "✅ ผู้ใช้ทั่วไป" if name not in _ADMIN_COMMANDS else "🛡️ ผู้ดูแล (ต้องมีสิทธิ์ที่เกี่ยวข้อง)"
+
+        embed = discord.Embed(
+            title=f"ℹ️ วิธีใช้คำสั่ง: {prefix}{name}",
+            description=desc_short,
+            color=discord.Color.blurple()
+        )
+        embed.add_field(name="การใช้งาน", value=f"`{usage}`", inline=False)
+        embed.add_field(name="ตัวอย่าง", value=f"```\n{example}\n```", inline=False)
+        embed.add_field(name="Aliases", value=aliases, inline=True)
+        embed.add_field(name="สิทธิ์ที่ต้องใช้", value=is_admin, inline=True)
+        if note:
+            embed.add_field(name="หมายเหตุ", value=note, inline=False)
+
+        await ctx.send(embed=embed)
+        return
+
+    # โหมดแสดงรายการทั้งหมด (สรุป)
+    all_cmds = {c.name for c in bot.commands if not c.hidden}
+    general = sorted(all_cmds - _ADMIN_COMMANDS | {"help"})
+    admin = sorted(all_cmds & _ADMIN_COMMANDS)
+
+    embed = discord.Embed(
+        title="📜 รายการคำสั่งทั้งหมด",
+        description=f"พิมพ์ `{prefix}help <คำสั่ง>` เพื่อดูวิธีใช้แบบละเอียด",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(prefix, general), inline=False)
+    embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(prefix, admin), inline=False)
+
+    await ctx.send(embed=embed)
+
 
 # ====== Monthly scheduler (new) ======
 async def _already_ran_this_month(log_ch: discord.TextChannel, tz: timezone) -> bool:

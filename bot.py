@@ -10,13 +10,13 @@ from datetime import datetime, timezone, timedelta
 # ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
-LOG_CHANNEL_ID = 1418941833819590699  # ห้องเก็บ logs ของการรีเฟรชอายุ
+LOG_CHANNEL_ID = 1418941833819590699
 
 ROLE_ID_TO_GIVE = 1321268883088211981
 ROLE_MALE = 1321268883025559689
 ROLE_FEMALE = 1321268883025559688
 ROLE_LGBT = 1321268883025559687
-ROLE_GENDER_UNDISCLOSED = 1419046348023398421  # เพศไม่ระบุ/ไม่อยากเปิดเผย
+ROLE_GENDER_UNDISCLOSED = 1419046348023398421 
 
 # --- Age roles ---
 ROLE_0_12   = 1402907371696558131
@@ -33,7 +33,7 @@ ROLE_50_54  = 1418704062592843948
 ROLE_55_59  = 1418704067194261615
 ROLE_60_64  = 1418704072617496666
 ROLE_65_UP  = 1418704076119736390
-ROLE_AGE_UNDISCLOSED = 1419045340576747663  # อายุไม่ระบุ/ไม่อยากเปิดเผย
+ROLE_AGE_UNDISCLOSED = 1419045340576747663
 
 APPEND_FORM_NAME_TO_NICK = True
 
@@ -609,7 +609,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 user=interaction.user,
                 gender_text=gender_raw,
                 age_text=age_raw if age_raw else "ไม่ระบุ",
-                form_name=nick,  # ว่างได้: ฝั่งอนุมัติจะไม่แก้ชื่อ
+                form_name=nick, 
             )
             await channel.send(
                 content=interaction.user.mention,

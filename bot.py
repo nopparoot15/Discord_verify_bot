@@ -112,7 +112,8 @@ def _base_display_name(member: discord.Member | discord.User) -> str:
         or getattr(member, "name", None)
         or ""
     ).strip()
-    return re.sub(r"\s*$begin:math:text$.*?$end:math:text$\s*$", "", base).strip()
+    # ตัดวงเล็บท้ายชื่อ (ถ้ามี)
+    return re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
 def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
     names = filter(None, {
         getattr(member, "nick", ""),
@@ -161,7 +162,7 @@ _FEMALE_ALIASES_RAW = {
     "nữ", "phụ nữ", "con gái",
     "wanita", "perempuan", "cewek",
     "babae", "dalaga",
-    "महिला", "औरत", "लड़की", "ladki", "aurat", "عورت", "ขاتون",
+    "महिला", "औरत", "लड़की", "ladki", "aurat", "ขاتון",
     "أنثى", "امرأة", "بنت", "فتاة",
     "kadın", "bayan", "kız",
     "женщина", "девушка", "девочка", "жінка", "дівчина",
@@ -293,7 +294,8 @@ def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
         or member.name
         or ""
     ).strip()
-    base = re.sub(r"\s*$begin:math:text$.*?$end:math:text$\s*$", "", base).strip()
+    # ตัดวงเล็บท้ายชื่อเดิม (ถ้ามี)
+    base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
     real = (form_name or "").strip()
     candidate = f"{base} ({real})".strip()
     if len(candidate) <= 32:
@@ -457,13 +459,54 @@ async def _run_full_age_refresh(guild: discord.Guild):
     )
     await _log_chunks(log_ch, header, changed_lines + (["— Errors —"] + error_lines if error_lines else []))
 
+# ====== Helpers for editing approval embed ======
+async def _find_latest_verification_message(guild: discord.Guild, member: discord.Member) -> discord.Message | None:
+    ch = guild.get_channel(APPROVAL_CHANNEL_ID)
+    if not ch:
+        return None
+    async for m in ch.history(limit=500):
+        if m.author == bot.user and m.embeds and m.mentions and member in m.mentions:
+            return m
+    return None
+
+def _set_embed_field_value(embed: discord.Embed, keys: list[str], value: str):
+    keys_low = [k.lower() for k in keys]
+    for i, f in enumerate(embed.fields):
+        name = (f.name or "").lower()
+        if any(k in name for k in keys_low):
+            embed.set_field_at(i, name=f.name, value=value, inline=f.inline)
+            return
+    # ถ้าไม่พบฟิลด์ ก็เพิ่มใหม่ (ใช้ชื่อ key แรก)
+    embed.add_field(name=keys[0].title(), value=value, inline=False)
+
+def _append_audit_footer(embed: discord.Embed, actor: str, label: str = "Edited"):
+    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+    orig = embed.footer.text or ""
+    embed.set_footer(text=(f"{orig} • {label} by {actor} • {stamp}" if orig else f"{label} by {actor} • {stamp}"))
+
+async def _update_approval_embed(member: discord.Member, *, nickname: str | None = None, age: str | None = None, gender_name: str | None = None, actor: str | None = None) -> bool:
+    msg = await _find_latest_verification_message(member.guild, member)
+    if not msg or not msg.embeds:
+        return False
+    e = copy_embed_fields(msg.embeds[0])
+    if nickname is not None:
+        _set_embed_field_value(e, ["Nickname / ชื่อเล่น", "nickname", "ชื่อเล่น"], nickname if nickname else "ไม่ระบุ")
+    if age is not None:
+        _set_embed_field_value(e, ["Age / อายุ", "age", "อายุ"], age if age else "ไม่ระบุ")
+    if gender_name is not None:
+        _set_embed_field_value(e, ["Gender / เพศ", "gender", "เพศ"], gender_name if gender_name else "ไม่ระบุ")
+    if actor:
+        _append_audit_footer(e, actor, "Edited")
+    await msg.edit(embed=e)
+    return True
+
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
         label="Nickname / ชื่อเล่น (เว้นว่างได้)",
         placeholder="ชื่อเล่น • 2–32 ตัว (ปล่อยว่างถ้าไม่อยากระบุ)",
         style=discord.TextStyle.short,
-        min_length=0, max_length=32, required=False     # ← เปลี่ยน: เว้นว่างได้
+        min_length=0, max_length=32, required=False
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (ปล่อยว่าง = ไม่ระบุ)",
@@ -510,7 +553,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     ephemeral=True
                 )
                 return
-            # กันกรณีชื่อเล่น = ชื่อดิสคอร์ด (แม้ดัดรูปแบบอักษร/เลข/อีโมจิ)
             if _canon_full(nick) in _discord_names_set(interaction.user):
                 await interaction.followup.send(
                     "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
@@ -519,9 +561,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 )
                 return
 
-        # --- Validate gender (ถ้าไม่ว่างค่อยตรวจความสะอาด; ว่าง=ไม่ระบุ) ---
+        # --- Validate gender ---
         gender_raw = (self.gender.value or "")
-        if gender_raw.strip():  # มีอินพุต → ตรวจความสะอาด เว้นแต่เป็นคำพ้อง "ไม่ระบุ"
+        if gender_raw.strip():
             if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
                 if any(ch.isdigit() for ch in gender_raw) or any(c in INVALID_CHARS for c in gender_raw) or contains_emoji(gender_raw):
                     await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
@@ -549,9 +591,9 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         if channel:
             view = ApproveRejectView(
                 user=interaction.user,
-                gender_text=gender_raw,              # ว่างได้ → resolve เป็นไม่ระบุเพศ
-                age_text=age_raw if age_raw else "ไม่ระบุ",  # ให้ฝั่ง refresh เข้าใจว่าไม่ระบุ
-                form_name=nick,                      # ← ว่างได้: ฝั่งอนุมัติจะไม่แก้ชื่อ
+                gender_text=gender_raw,
+                age_text=age_raw if age_raw else "ไม่ระบุ",
+                form_name=nick,
             )
             await channel.send(
                 content=interaction.user.mention,
@@ -708,7 +750,6 @@ class ApproveRejectView(discord.ui.View):
         except discord.NotFound:
             pass
 
-# ====== Commands ======
 # ====== Commands ======
 @bot.command(name="verify_embed")
 @commands.has_permissions(administrator=True)
@@ -876,7 +917,9 @@ async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: st
             return
         try:
             await member.edit(nick=new_nick, reason="Admin: clear form nickname")
-            await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{new_nick}` (เป้าหมาย: {member.mention})")
+            actor = getattr(ctx.author, "display_name", None) or ctx.author.name
+            updated = await _update_approval_embed(member, nickname="", actor=actor)
+            await ctx.send(f"✅ เอาวงเล็บชื่อเล่นออกแล้ว → `{new_nick}` (เป้าหมาย: {member.mention})" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
         except discord.Forbidden:
             await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้")
         except discord.HTTPException:
@@ -900,7 +943,9 @@ async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: st
 
     try:
         await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nickname}")
-        await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}")
+        actor = getattr(ctx.author, "display_name", None) or ctx.author.name
+        updated = await _update_approval_embed(member, nickname=nickname, actor=actor)
+        await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
     except discord.Forbidden:
         await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้")
     except discord.HTTPException:
@@ -948,7 +993,9 @@ async def setgender(ctx: commands.Context, member: discord.Member, *, gender_tex
             return
 
     removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
-    await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+    actor = getattr(ctx.author, "display_name", None) or ctx.author.name
+    updated = await _update_approval_embed(member, gender_name=role.name, actor=actor)
+    await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
 
 @bot.command(name="setage", aliases=["age", "อายุ", "ปรับอายุ"])
 @commands.has_permissions(manage_roles=True)
@@ -1000,7 +1047,17 @@ async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str
             return
 
     removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
-    await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
+
+    # ค่าที่จะแสดงใน embed
+    if role.id == ROLE_AGE_UNDISCLOSED:
+        display_age = "ไม่ระบุ"
+    else:
+        at = age_text.strip()
+        display_age = at if re.fullmatch(r"\d{1,3}", at or "") else role.name
+
+    actor = getattr(ctx.author, "display_name", None) or ctx.author.name
+    updated = await _update_approval_embed(member, age=display_age, actor=actor)
+    await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})" + ("" if updated else " • ⚠️ ไม่พบ embed เพื่ออัปเดต"))
 
 # ====== Help command (list & details) ======
 try:
@@ -1126,7 +1183,6 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
     embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(prefix, admin), inline=False)
 
     await ctx.send(embed=embed)
-
 
 # ====== Monthly scheduler (new) ======
 async def _already_ran_this_month(log_ch: discord.TextChannel, tz: timezone) -> bool:

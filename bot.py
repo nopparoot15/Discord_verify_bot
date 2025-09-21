@@ -691,7 +691,7 @@ class ApproveRejectView(discord.ui.View):
                     return
 
             # วงเล็บชื่อเล่น: ทำเฉพาะเมื่อกรอกชื่อเล่นมาเท่านั้น
-            if APPEND_FORM_NAME_TO_NICK && self.form_name:
+            if APPEND_FORM_NAME_TO_NICK and self.form_name:
                 bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
                 try:
                     if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:

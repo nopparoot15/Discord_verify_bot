@@ -7,6 +7,12 @@ import discord
 from discord.ext import commands
 from datetime import datetime, timezone, timedelta
 
+# ====== (NEW) Try grapheme-aware regex ======
+try:
+    import regex as _regex  # pip install regex
+except Exception:
+    _regex = None
+
 # ====== CONFIGURATION ======
 VERIFY_CHANNEL_ID = 1402889712888447037
 APPROVAL_CHANNEL_ID = 1402889786712395859
@@ -62,7 +68,14 @@ intents.members = True
 bot = commands.Bot(command_prefix="$", intents=intents)
 pending_verifications = set()
 
+# ====== (NEW) Length policy ======
+DISCORD_HARD_LIMIT = 32     # Discord hard limit for display name
+UI_SOFT_LIMIT = 28          # กันโดนตัดในมือถือ
+MAX_FORM_NICK_VISIBLE = 20  # เพดานชื่อเล่นจากฟอร์ม (ที่ “ผู้ใช้เห็นได้”)
+
+# ====== Char policies ======
 INVALID_CHARS = set("=+*/@#$%^&*()<>?|{}[]\"'\\~`")
+ALLOWED_NICK_RE = re.compile(r"^[A-Za-zก-๙ ]+$")  # ไทย/อังกฤษ + เว้นวรรค
 
 EMOJI_RE = re.compile(
     r"["
@@ -83,6 +96,31 @@ EMOJI_RE = re.compile(
 def contains_emoji(s: str) -> bool:
     return bool(EMOJI_RE.search(s or ""))
 
+# ====== (NEW) Grapheme helpers ======
+_ZW_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
+
+def graphemes(s: str) -> list[str]:
+    if not s:
+        return []
+    if _regex:
+        return _regex.findall(r"\X", s)
+    # Fallback (approx): split per codepoint (อาจไม่นับ grapheme เป๊ะ แต่พอใช้กันล้นได้)
+    return list(s)
+
+def g_len(s: str) -> int:
+    return len(graphemes(s))
+
+def g_truncate(s: str, n: int) -> str:
+    if n <= 0:
+        return ""
+    return "".join(graphemes(s)[:n])
+
+def sanitize_text(s: str) -> str:
+    s = (s or "").replace("\n", " ").replace("\r", " ")
+    s = _ZW_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
 # ====== Admin notifications ======
 async def notify_admin(guild: discord.Guild, text: str):
     try:
@@ -92,8 +130,8 @@ async def notify_admin(guild: discord.Guild, text: str):
     except Exception:
         pass
 
-# ====== Nickname canonicalizer & same-name block ======
-_ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
+# ====== Nick canonicalizer & same-name block ======
+_ZERO_WIDTH_RE = _ZW_RE
 _CONFUSABLES_MAP = str.maketrans({
     # Cyrillic -> Latin
     "А":"A","В":"B","Е":"E","К":"K","М":"M","Н":"H","О":"O","Р":"P","С":"S","Т":"T","У":"Y","Х":"X",
@@ -148,6 +186,45 @@ def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
         _base_display_name(member),
     })
     return {_canon_full(x) for x in names if x}
+
+# ====== (NEW) Nick builder ที่กันล้นแบบกราฟีม ======
+def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
+    base = _base_display_name(member)
+    nick = sanitize_text(form_name)
+    # ถ้าไม่มี base ให้ใช้ nick ตรง ๆ (ตัดให้ไม่เกิน soft/hard)
+    if not base:
+        limit = min(UI_SOFT_LIMIT, DISCORD_HARD_LIMIT)
+        add = g_truncate(nick, limit)
+        if g_len(nick) > g_len(add) and g_len(add) >= 1:
+            add = g_truncate(nick, max(0, limit - 1)) + "…"
+        return add
+
+    # พื้นที่ที่เหลือ (รวม " (" และ ")")
+    remain_soft = UI_SOFT_LIMIT - g_len(base) - 3
+    remain_hard = DISCORD_HARD_LIMIT - g_len(base) - 3
+    remain = min(remain_soft, remain_hard)
+    if remain <= 0:
+        return base  # ไม่มีพื้นที่พอจะใส่วงเล็บ
+
+    add = g_truncate(nick, remain)
+    trimmed = g_len(nick) > g_len(add)
+    if trimmed and remain >= 2:
+        add = g_truncate(nick, remain - 1) + "…"
+    elif trimmed and remain < 2:
+        return base
+
+    candidate = f"{base} ({add})".strip()
+    # Safety double-check
+    if g_len(candidate) > DISCORD_HARD_LIMIT:
+        # ตัดส่วน add ลงอีก
+        overflow = g_len(candidate) - DISCORD_HARD_LIMIT
+        add2 = g_truncate(add, max(0, g_len(add) - overflow))
+        if g_len(add2) == 0:
+            return base
+        candidate = f"{base} ({add2})"
+        if g_len(candidate) > DISCORD_HARD_LIMIT:
+            return base
+    return candidate
 
 # ====== Gender Normalizer & Aliases ======
 def _norm_gender(s: str) -> str:
@@ -310,26 +387,6 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     for f in src.fields:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
     return e
-
-def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
-    base = (
-        member.nick
-        or getattr(member, "global_name", None)
-        or member.display_name
-        or member.name
-        or ""
-    ).strip()
-    base = re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
-    real = (form_name or "").strip()
-    candidate = f"{base} ({real})".strip()
-    if len(candidate) <= 32:
-        return candidate
-    max_base = 32 - (len(real) + 3)
-    if max_base > 1:
-        candidate = f"{base[:max_base].rstrip()} ({real})"
-        if len(candidate) <= 32:
-            return candidate
-    return real[:32]
 
 # ---------- Role sets ----------
 GENDER_ROLE_IDS_ALL = [ROLE_MALE, ROLE_FEMALE, ROLE_LGBT, ROLE_GENDER_UNDISCLOSED]
@@ -556,20 +613,20 @@ def build_account_check_field(user: discord.User) -> tuple[str, str, str, int | 
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
-        label="Nickname / ชื่อเล่น (เว้นว่างได้)",
-        placeholder="ชื่อเล่น • 2–32 ตัว (ปล่อยว่างถ้าไม่อยากระบุ)",
+        label="Nickname / ชื่อเล่น (ปล่อยว่าง = ไม่ระบุ)",
+        placeholder="ชื่อเล่น 2–20 ตัวอักษร",
         style=discord.TextStyle.short,
-        min_length=0, max_length=32, required=False
+        min_length=0, max_length=20, required=False
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (ปล่อยว่าง = ไม่ระบุ)",
-        placeholder='เช่น 21 หรือ "ไม่ระบุ" (ปล่อยว่างก็ได้)',
+        placeholder='เช่น 21',
         style=discord.TextStyle.short,
         min_length=0, max_length=16, required=False
     )
     gender = discord.ui.TextInput(
         label="Gender / เพศ (ปล่อยว่าง = ไม่ระบุ)",
-        placeholder='เช่น ชาย / หญิง / LGBT (ปล่อยว่างก็ได้)',
+        placeholder='เช่น ชาย / หญิง / LGBT',
         style=discord.TextStyle.short,
         min_length=0, required=False
     )
@@ -599,28 +656,35 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 return
 
             # --- Validate nickname (if provided) ---
-            nick = (self.name.value or "").strip()
+            nick = sanitize_text(self.name.value or "")
             if nick:
-                if len(nick) < 2 or len(nick) > 32 or any(ch.isdigit() for ch in nick) or any(c in INVALID_CHARS for c in nick) or contains_emoji(nick):
+                # policy: ไทย/อังกฤษ+เว้นวรรค, ไม่มีตัวเลข/อีโมจิ/สัญลักษณ์, ความยาว 2–20 (grapheme)
+                if not ALLOWED_NICK_RE.fullmatch(nick) or contains_emoji(nick) or any(c in INVALID_CHARS for c in nick):
                     await interaction.followup.send(
-                        "❌ Nickname invalid (letters only, 2–32; no digits/symbols/emoji).",
+                        "❌ ชื่อเล่นใช้ได้เฉพาะอักษรไทย/อังกฤษ และเว้นวรรค (ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)",
+                        ephemeral=True
+                    )
+                    return
+                if not (2 <= g_len(nick) <= MAX_FORM_NICK_VISIBLE):
+                    await interaction.followup.send(
+                        f"❌ ชื่อเล่นต้องยาว 2–{MAX_FORM_NICK_VISIBLE} ตัวอักษร (ตามที่มองเห็น)",
                         ephemeral=True
                     )
                     return
                 if _canon_full(nick) in _discord_names_set(interaction.user):
                     await interaction.followup.send(
                         "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
-                        "   (เปลี่ยนพิมพ์เล็ก-ใหญ่ ใส่อักษรพิเศษ/อีโมจิ หรือใช้เลขแทนอักษร ไม่ถือว่าต่าง)",
+                        "   (เปลี่ยนพิมพ์เล็ก-ใหญ่/ใส่อักษรพิเศษ/เลข แถมไม่นับว่า 'ต่าง')",
                         ephemeral=True
                     )
                     return
 
             # --- Validate gender (text only when provided) ---
-            gender_raw = (self.gender.value or "")
-            if gender_raw.strip():
+            gender_raw = sanitize_text(self.gender.value or "")
+            if gender_raw:
                 if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
-                    if any(ch.isdigit() for ch in gender_raw) or any(c in INVALID_CHARS for c in gender_raw) or contains_emoji(gender_raw):
-                        await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
+                    if not ALLOWED_NICK_RE.fullmatch(gender_raw) or contains_emoji(gender_raw) or any(c in INVALID_CHARS for c in gender_raw):
+                        await interaction.followup.send("❌ Gender invalid. ใช้อักษรไทย/อังกฤษเท่านั้น", ephemeral=True)
                         return
 
             pending_verifications.add(interaction.user.id)
@@ -628,7 +692,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             # Prepare embed fields
             display_nick = (nick if nick else "ไม่ระบุ")
             display_age = (age_raw if age_raw else "ไม่ระบุ")
-            display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
+            display_gender = (gender_raw if gender_raw else "ไม่ระบุ")
 
             embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
             thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
@@ -668,7 +732,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             )
 
             await interaction.followup.send(
-                "✅ Verification request submitted. Please wait for admin approval.\n"
                 "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน",
                 ephemeral=True
             )
@@ -1008,24 +1071,27 @@ async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: st
             return
 
         # validate ชื่อเล่น
-        if len(nickname) < 2 or len(nickname) > 32 or any(ch.isdigit() for ch in nickname) \
-           or any(c in INVALID_CHARS for c in nickname) or contains_emoji(nickname):
-            await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
+        nick = sanitize_text(nickname)
+        if (not ALLOWED_NICK_RE.fullmatch(nick)) or contains_emoji(nick) or any(c in INVALID_CHARS for c in nick):
+            await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ใช้อักษรไทย/อังกฤษ+เว้นวรรค; ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
             return
-        if _canon_full(nickname) in _discord_names_set(member):
+        if not (2 <= g_len(nick) <= MAX_FORM_NICK_VISIBLE):
+            await ctx.send(f"❌ ชื่อเล่นต้องยาว 2–{MAX_FORM_NICK_VISIBLE} ตัวอักษร (ที่มองเห็น)")
+            return
+        if _canon_full(nick) in _discord_names_set(member):
             await ctx.send("❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของเป้าหมายจริง ๆ")
             return
 
-        new_nick = build_parenthesized_nick(member, nickname)
+        new_nick = build_parenthesized_nick(member, nick)
         try:
-            await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nickname}")
+            await member.edit(nick=new_nick, reason=f"Admin: set form nickname → {nick}")
             await ctx.send(f"✅ ตั้งชื่อเป็น `{new_nick}` ให้ {member.mention}")
         except discord.Forbidden:
             await ctx.send("❌ บอทไม่มีสิทธิ์พอในการแก้ชื่อคนนี้"); return
         except discord.HTTPException:
             await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนแก้ชื่อ"); return
 
-        updated = await _update_approval_embed_for_member(ctx.guild, member, nickname=nickname)
+        updated = await _update_approval_embed_for_member(ctx.guild, member, nickname=nick)
         if not updated:
             await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
     except Exception as e:
@@ -1110,7 +1176,8 @@ async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str
         await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
 
         # อัปเดต embed
-        disp_age = "ไม่ระบุ" if role.id == ROLE_AGE_UNDISCLOSED else (re.search(r"\d{1,3}", age_text).group(0) if re.search(r"\d{1,3}", age_text) else age_text.strip())
+        m = re.search(r"\d{1,3}", age_text)
+        disp_age = "ไม่ระบุ" if role.id == ROLE_AGE_UNDISCLOSED else (m.group(0) if m else age_text.strip())
         updated = await _update_approval_embed_for_member(ctx.guild, member, age=disp_age)
         if not updated:
             await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
@@ -1405,6 +1472,13 @@ async def _auto_refresh_daemon():
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
+    if _regex is None:
+        try:
+            ch = None
+            # แจ้งเตือนใน console เท่านั้น (หลีกเลี่ยงการสแปมแอดมิน)
+            print("⚠️  python 'regex' not installed; falling back to simple grapheme split. Install with: pip install regex")
+        except Exception:
+            pass
     if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
         bot.loop.create_task(_auto_refresh_daemon())
         bot._age_refresh_daemon_started = True

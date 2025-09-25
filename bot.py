@@ -297,19 +297,47 @@ async def build_avatar_attachment(user: discord.User):
 
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     e = discord.Embed(
-        title=src.title or discord.Embed.Empty,
-        description=src.description or discord.Embed.Empty,
-        color=src.color if src.color is not None else discord.Embed.Empty,
+        title=(src.title if src.title else None),
+        description=(src.description if src.description else None),
+        color=(src.color if src.color is not None else None),
     )
-    if src.author and (src.author.name or src.author.icon_url or src.author.url):
-        e.set_author(name=getattr(src.author, "name", discord.Embed.Empty) or discord.Embed.Empty)
-    if src.footer and (src.footer.text or src.footer.icon_url):
-        e.set_footer(text=getattr(src.footer, "text", discord.Embed.Empty) or discord.Embed.Empty)
-    if src.image and src.image.url:
-        e.set_image(url=src.image.url)
+    try:
+        author_name = getattr(src.author, "name", None)
+        author_icon = getattr(src.author, "icon_url", None)
+        author_url  = getattr(src.author, "url", None)
+        if author_name or author_icon or author_url:
+            e.set_author(
+                name=(author_name or ""),
+                icon_url=(str(author_icon) if author_icon else None),
+                url=(str(author_url) if author_url else None),
+            )
+    except Exception:
+        pass
+    try:
+        footer_text = getattr(src.footer, "text", None)
+        footer_icon = getattr(src.footer, "icon_url", None)
+        if footer_text or footer_icon:
+            e.set_footer(
+                text=(footer_text or ""),
+                icon_url=(str(footer_icon) if footer_icon else None),
+            )
+    except Exception:
+        pass
+    try:
+        if src.image and src.image.url:
+            e.set_image(url=src.image.url)
+    except Exception:
+        pass
+    try:
+        if src.thumbnail and src.thumbnail.url:
+            e.set_thumbnail(url=src.thumbnail.url)
+    except Exception:
+        pass
     for f in src.fields:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
+
     return e
+
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     base = (

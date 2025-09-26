@@ -95,10 +95,8 @@ async def notify_admin(guild: discord.Guild, text: str):
 # ====== Nickname canonicalizer & same-name block ======
 _ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]")
 _CONFUSABLES_MAP = str.maketrans({
-    # Cyrillic -> Latin
     "А":"A","В":"B","Е":"E","К":"K","М":"M","Н":"H","О":"O","Р":"P","С":"S","Т":"T","У":"Y","Х":"X",
     "а":"a","в":"b","е":"e","к":"k","м":"m","н":"h","о":"o","р":"p","с":"c","т":"t","у":"y","х":"x",
-    # Greek -> Latin
     "Α":"A","Β":"B","Ε":"E","Ζ":"Z","Η":"H","Ι":"I","Κ":"K","Μ":"M","Ν":"N","Ο":"O","Ρ":"P","Τ":"T","Υ":"Y","Χ":"X",
     "α":"a","β":"b","ε":"e","ι":"i","κ":"k","ν":"n","ο":"o","ρ":"p","τ":"t","υ":"y","χ":"x",
 })
@@ -137,7 +135,6 @@ def _base_display_name(member: discord.Member | discord.User) -> str:
         or getattr(member, "name", None)
         or ""
     ).strip()
-    # ลบวงเล็บชื่อเล่นเดิม (ถ้ามี)
     return re.sub(r"\s*\(.*?\)\s*$", "", base).strip()
 def _discord_names_set(member: discord.Member | discord.User) -> set[str]:
     names = filter(None, {
@@ -237,7 +234,7 @@ _AGE_UNDISCLOSED_ALIASES_RAW = {
 AGE_UNDISCLOSED_ALIASES = {_norm_simple(x) for x in _AGE_UNDISCLOSED_ALIASES_RAW}
 def is_age_undisclosed(text: str) -> bool:
     t = _norm_simple(text)
-    return (t == "") or (t in AGE_UNDISCLOSED_ALIASES)  # ว่าง = ไม่ระบุ
+    return (t == "") or (t in AGE_UNDISCLOSED_ALIASES)
 
 def resolve_gender_role_id(text: str) -> int:
     t = _norm_gender(text)
@@ -249,7 +246,7 @@ def resolve_gender_role_id(text: str) -> int:
         return ROLE_GENDER_UNDISCLOSED
     if t in LGBT_ALIASES:
         return ROLE_LGBT
-    return ROLE_GENDER_UNDISCLOSED  # ค่าอื่น/ว่าง → ไม่ระบุเพศ
+    return ROLE_GENDER_UNDISCLOSED
 
 def resolve_age_role_id(age_text: str) -> int | None:
     if is_age_undisclosed(age_text):
@@ -335,9 +332,7 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
         pass
     for f in src.fields:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
-
     return e
-
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     base = (
@@ -533,7 +528,7 @@ def _set_field(embed: discord.Embed, name: str, value: str, *, inline=False):
 def _append_history_text(old: str, line: str, max_len: int = 1000) -> str:
     old = (old or "").strip()
     lines = [l for l in old.split("\n") if l.strip()]
-    lines.insert(0, line)  # ล่าสุดอยู่บน
+    lines.insert(0, line)
     out = "\n".join(lines)
     if len(out) > max_len:
         out = out[:max_len]
@@ -556,7 +551,7 @@ async def _find_all_idcard_messages_by_user_id(guild: discord.Guild, user_id: in
             ft = (e.footer.text or "") if e.footer else ""
             if str(user_id) in ft:
                 found.append(m)
-    found.sort(key=lambda x: x.created_at, reverse=True)  # ใหม่สุดก่อน
+    found.sort(key=lambda x: x.created_at, reverse=True)
     return found
 
 async def _ensure_idcard_message(
@@ -584,7 +579,6 @@ async def _ensure_idcard_message(
         description=f"ข้อมูลยืนยันตัวตนของ {user.mention}",
         color=discord.Color.orange()
     )
-    # ฟิลด์มาตรฐานขั้นต่ำ
     _set_field(e, "Nickname / ชื่อเล่น", "ไม่ระบุ", inline=False)
     _set_field(e, "Age / อายุ", "ไม่ระบุ", inline=False)
     _set_field(e, "Gender / เพศ", "ไม่ระบุ", inline=False)
@@ -650,7 +644,7 @@ async def _idcard_update(
     except discord.HTTPException:
         return False
 
-# ====== Update latest approval embed (helpers) (ของเดิม—ไว้ใช้กับฟีเจอร์เก่า หากยังมี) ======
+# ====== Update latest approval embed (helpers) (compat) ======
 async def _find_latest_approval_message(guild: discord.Guild, member: discord.Member):
     ch = guild.get_channel(APPROVAL_CHANNEL_ID)
     if not ch:
@@ -801,7 +795,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
             pending_verifications.add(interaction.user.id)
 
-            # Prepare embed fields
+            # Prepare embed fields (ใช้ค่าที่ผู้ใช้กรอกจริง)
             display_nick = (nick if nick else "ไม่ระบุ")
             display_age = (age_raw if age_raw else "ไม่ระบุ")
             display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
@@ -846,7 +840,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 try:
                     await msg.edit(content=interaction.user.mention, embed=embed, view=view)
                 except Exception:
-                    # ถ้าแก้ไม่ได้ ส่งใหม่
                     await channel.send(content=interaction.user.mention, embed=embed, view=view)
 
             # อัปเดตสถานะ/ประวัติลง ID Card
@@ -886,7 +879,6 @@ class VerificationView(discord.ui.View):
                 ephemeral=True
             )
             return
-
         await interaction.response.send_modal(VerificationForm())
 
 class ApproveRejectView(discord.ui.View):
@@ -958,15 +950,15 @@ class ApproveRejectView(discord.ui.View):
                 except Exception:
                     pass
 
-            # ✅ อัปเดต ID Card
+            # ✅ อัปเดต ID Card ด้วย "ค่าที่ผู้ใช้กรอกจริง"
             await _idcard_update(
                 interaction.guild, self.user,
                 status=f"✅ Verified by {getattr(interaction.user, 'display_name', interaction.user.name)}",
-                history_line=f"อนุมัติ (เพศ: {gender_role.name if gender_role else '—'}; อายุ: {age_role.name if age_role else '—'})",
+                history_line="อนุมัติคำขอยืนยัน",
                 patch_fields={
                     "Nickname / ชื่อเล่น": (self.form_name if self.form_name else "ไม่ระบุ"),
-                    "Gender / เพศ": (gender_role.name if gender_role else "ไม่ระบุ"),
-                    "Age / อายุ": (age_role.name if age_role else "ไม่ระบุ"),
+                    "Gender / เพศ": (self.gender_text if self.gender_text.strip() else "ไม่ระบุ"),
+                    "Age / อายุ": (self.age_text if self.age_text.strip() else "ไม่ระบุ"),
                 },
                 color=discord.Color.green()
             )
@@ -984,7 +976,6 @@ class ApproveRejectView(discord.ui.View):
                 child.disabled = True
 
             try:
-                # ปิดปุ่มบน ID Card (ข้อความเดียว)
                 msg = interaction.message
                 if msg and msg.embeds:
                     await msg.edit(view=self)
@@ -1269,8 +1260,8 @@ async def setgender(ctx: commands.Context, member: discord.Member, *, gender_tex
         removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
         await ctx.send(f"✅ ตั้งเพศของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
 
-        # sync ID Card
-        await _idcard_update(ctx.guild, member, patch_fields={"Gender / เพศ": role.name}, history_line="Admin ปรับเพศใน ID Card")
+        # ✅ sync ID Card ด้วยค่าที่พิมพ์ (ไม่ใช่ชื่อยศ)
+        await _idcard_update(ctx.guild, member, patch_fields={"Gender / เพศ": (gender_text or "ไม่ระบุ")}, history_line="Admin ปรับเพศใน ID Card")
     except Exception as e:
         await notify_admin(ctx.guild, f"setgender error: {e!r}")
         await ctx.send("❌ คำสั่งล้มเหลว")
@@ -1313,11 +1304,10 @@ async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str
         removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
         await ctx.send(f"✅ ตั้งอายุของ {member.mention} เป็น **{role.name}** (removed: {removed_txt})")
 
-        # อัปเดต embed เก่า (compat) + ID Card
+        # ✅ sync ID Card ด้วยค่าที่พิมพ์ (ไม่ใช่ชื่อยศ)
         disp_age_num = re.search(r"\d{1,3}", age_text)
         disp_age = "ไม่ระบุ" if role.id == ROLE_AGE_UNDISCLOSED else (disp_age_num.group(0) if disp_age_num else age_text.strip())
-
-        await _idcard_update(ctx.guild, member, patch_fields={"Age / อายุ": role.name}, history_line="Admin ปรับอายุใน ID Card")
+        await _idcard_update(ctx.guild, member, patch_fields={"Age / อายุ": disp_age}, history_line="Admin ปรับอายุใน ID Card")
     except Exception as e:
         await notify_admin(ctx.guild, f"setage error: {e!r}")
         await ctx.send("❌ คำสั่งล้มเหลว")
@@ -1502,7 +1492,6 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
 @bot.event
 async def on_member_join(member: discord.Member):
     try:
-        # ถ้าเคยมี ID Card เก่าอยู่แล้ว ปล่อยไว้ (จะถูกแทนที่ก็ตอนกด Verify)
         await _ensure_idcard_message(member.guild, member, seed_embed=None, replace_old=False)
         await _idcard_update(member.guild, member, status="🟢 In server", history_line="เข้าร่วมเซิร์ฟเวอร์", color=discord.Color.blurple())
     except Exception:
@@ -1512,7 +1501,6 @@ async def on_member_join(member: discord.Member):
 async def on_member_remove(member: discord.Member):
     try:
         reason = "ออกจากเซิร์ฟเวอร์"
-        # พยายามเดาว่าถูกเตะจาก audit log ภายใน 5 นาทีหลังเหตุการณ์
         try:
             async for entry in member.guild.audit_logs(limit=5, action=discord.AuditLogAction.kick):
                 if entry.target.id == member.id and (datetime.now(timezone.utc) - entry.created_at).total_seconds() < 300:
@@ -1609,7 +1597,6 @@ def _compute_next_run_local(now_local: datetime) -> datetime:
             target = target + timedelta(days=7)
         return target
 
-    # DAILY
     target = now_local.replace(hour=h, minute=mi, second=0, microsecond=0)
     if now_local >= target:
         target = target + timedelta(days=1)
@@ -1641,7 +1628,6 @@ async def _auto_refresh_daemon():
                 await _run_full_age_refresh(guild)
                 await log_ch.send(_refresh_period_tag(datetime.now(tz), REFRESH_FREQUENCY) + " ✅ DONE")
         except Exception:
-            # กัน daemon ล้ม
             pass
 
 # ====== Persistent View Loader ======

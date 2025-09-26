@@ -869,18 +869,37 @@ async def verify_embed(ctx):
 
 @bot.command(name="userinfo")
 @commands.has_permissions(administrator=True)
-async def userinfo(ctx, member: discord.Member):
+async def userinfo(ctx, member: Optional[discord.Member] = None):
+    """
+    ใช้ได้ทั้ง:
+      - $userinfo                 → โชว์ของตัวเอง (ผู้สั่ง)
+      - $userinfo @someone        → โชว์ของคนที่เมนชัน
+      - $userinfo 1234567890123   → โชว์จาก user id
+    """
     try:
+        # ถ้าไม่ส่งอาร์กิวเมนต์มา ลองดูเมนชันก่อน ไม่มีก็ใช้คนสั่งคำสั่ง
+        if member is None:
+            if ctx.message.mentions:
+                member = ctx.message.mentions[0]
+            else:
+                member = ctx.author
+
         channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
         if not channel:
             await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
             return
 
         async for message in channel.history(limit=200):
-            if message.author == bot.user and message.embeds and message.mentions and member in message.mentions:
+            if (
+                message.author == bot.user
+                and message.embeds
+                and message.mentions
+                and member in message.mentions
+            ):
                 embed0 = message.embeds[0]
                 new_embed = copy_embed_fields(embed0)
 
+                # ถ้ามีรูปแนบมากับ embed เดิม แนบกลับไปด้วยเพื่อให้ thumbnail แสดง
                 if message.attachments:
                     try:
                         att = message.attachments[0]
@@ -891,12 +910,15 @@ async def userinfo(ctx, member: discord.Member):
                         await ctx.send(file=file, embed=new_embed)
                         return
                     except Exception:
+                        # ถ้าดึงไฟล์แนบไม่ได้ ก็ส่ง embed อย่างเดียว
                         pass
 
                 await ctx.send(embed=new_embed)
                 return
 
         await ctx.send("❌ No verification info found for this user.")
+    except commands.BadArgument:
+        await ctx.send("❌ หา member ไม่เจอ ลองเมนชันหรือใส่ ID ดูนะ")
     except Exception as e:
         await notify_admin(ctx.guild, f"userinfo error: {e!r}")
         await ctx.send("❌ คำสั่งล้มเหลว")

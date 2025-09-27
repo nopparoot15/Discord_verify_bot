@@ -569,7 +569,7 @@ def build_account_check_field(user: discord.User) -> tuple[str, str, str, int | 
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
         label="Nickname / ชื่อเล่น (จำเป็นต้องระบุ)",
-        placeholder="ชื่อเล่น 2–20 ตัวอักษร (ห้ามเว้นว่าง)",
+        placeholder="ชื่อเล่น 2–10 ตัวอักษร (ห้ามเว้นว่าง)",
         style=discord.TextStyle.short,
         min_length=2, max_length=10,   
         required=True                  

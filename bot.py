@@ -297,7 +297,6 @@ async def build_avatar_attachment(user: discord.User):
         return None, None
 
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
-    """ทำสำเนา embed โดยไม่ใช้ Embed.Empty"""
     e = discord.Embed()
     if src.title:
         e.title = src.title
@@ -310,20 +309,19 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
         icon = getattr(src.author, "icon_url", None)
         url = getattr(src.author, "url", None)
         if name or icon or url:
-            # เปลี่ยนจาก discord.Embed.Empty → None
             e.set_author(name=name or None, icon_url=icon or None, url=url or None)
     if getattr(src, "footer", None):
         text = getattr(src.footer, "text", None)
         icon = getattr(src.footer, "icon_url", None)
         if text or icon:
-            # เปลี่ยนจาก discord.Embed.Empty → None
             e.set_footer(text=text or None, icon_url=icon or None)
     if src.image and src.image.url:
         e.set_image(url=src.image.url)
+    if src.thumbnail and src.thumbnail.url:   # ✅ เพิ่มส่วนนี้
+        e.set_thumbnail(url=src.thumbnail.url)
     for f in src.fields:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
     return e
-
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     base = (
@@ -919,6 +917,7 @@ async def userinfo(ctx, *, who: str = None):
                 ):
                     embed0 = message.embeds[0]
                     new_embed = copy_embed_fields(embed0)
+                    new_embed.title = "🪪 ID Card / บัตรยืนยันตัวตน"
 
                     if message.attachments:
                         try:

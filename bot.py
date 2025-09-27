@@ -297,15 +297,28 @@ async def build_avatar_attachment(user: discord.User):
         return None, None
 
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
-    e = discord.Embed(
-        title=src.title or discord.Embed.Empty,
-        description=src.description or discord.Embed.Empty,
-        color=src.color if src.color is not None else discord.Embed.Empty,
-    )
-    if src.author and (src.author.name or src.author.icon_url or src.author.url):
-        e.set_author(name=getattr(src.author, "name", discord.Embed.Empty) or discord.Embed.Empty)
-    if src.footer and (src.footer.text or src.footer.icon_url):
-        e.set_footer(text=getattr(src.footer, "text", discord.Embed.Empty) or discord.Embed.Empty)
+    """ทำสำเนา embed โดยไม่ใช้ Embed.Empty"""
+    e = discord.Embed()
+    if src.title:
+        e.title = src.title
+    if src.description:
+        e.description = src.description
+    if getattr(src, "color", None) is not None:
+        e.color = src.color
+    if getattr(src, "author", None):
+        name = getattr(src.author, "name", None)
+        icon = getattr(src.author, "icon_url", None)
+        url = getattr(src.author, "url", None)
+        if name or icon or url:
+            e.set_author(name=name or discord.Embed.Empty,
+                         icon_url=icon or discord.Embed.Empty,
+                         url=url or discord.Embed.Empty)
+    if getattr(src, "footer", None):
+        text = getattr(src.footer, "text", None)
+        icon = getattr(src.footer, "icon_url", None)
+        if text or icon:
+            e.set_footer(text=text or discord.Embed.Empty,
+                         icon_url=icon or discord.Embed.Empty)
     if src.image and src.image.url:
         e.set_image(url=src.image.url)
     for f in src.fields:
@@ -877,7 +890,7 @@ async def userinfo(ctx, *, who: str = None):
     $userinfo 123456789012345678
     """
     try:
-        # --------- หา member จาก mention / converter / fallback ----------
+        # ---------- หา member ----------
         member = None
         if ctx.message.mentions:
             member = ctx.message.mentions[0]
@@ -889,13 +902,13 @@ async def userinfo(ctx, *, who: str = None):
         if member is None:
             member = ctx.author
 
-        # --------- หา approval channel ----------
+        # ---------- หา approval channel ----------
         channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
         if not channel:
             await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
             return
 
-        # --------- อ่านประวัติแบบมีการจับสิทธิ์ ----------
+        # ---------- loop ประวัติ ----------
         try:
             async for message in channel.history(limit=200):
                 if (
@@ -907,7 +920,6 @@ async def userinfo(ctx, *, who: str = None):
                     embed0 = message.embeds[0]
                     new_embed = copy_embed_fields(embed0)
 
-                    # แนบรูปเดิมถ้ามี (ไม่สำเร็จก็ส่ง embed อย่างเดียว)
                     if message.attachments:
                         try:
                             att = message.attachments[0]
@@ -926,19 +938,19 @@ async def userinfo(ctx, *, who: str = None):
         except discord.Forbidden:
             await ctx.send(
                 "❌ บอทไม่มีสิทธิ์อ่านห้องอนุมัติ\n"
-                "→ ต้องเปิดสิทธิ์ **View Channel** และ **Read Message History** ให้บอทในห้องนั้น"
+                "→ ต้องเปิดสิทธิ์ View Channel + Read Message History"
             )
             return
         except discord.HTTPException as e:
-            await ctx.send(f"❌ อ่านประวัติห้องอนุมัติไม่สำเร็จ (HTTP): {e}")
+            await ctx.send(f"❌ อ่านประวัติห้องอนุมัติไม่สำเร็จ: {e}")
             return
 
         await ctx.send("❌ No verification info found for this user.")
 
     except Exception as e:
-        # ช่วย debug ให้เห็น error จริง (ชั่วคราว)
         await notify_admin(ctx.guild, f"userinfo error: {e!r}")
         await ctx.send(f"❌ คำสั่งล้มเหลว: {e!r}")
+
 
 # ---------- Single user refresh ----------
 @bot.command(name="refresh_age")

@@ -872,60 +872,73 @@ async def verify_embed(ctx):
 @commands.has_permissions(administrator=True)
 async def userinfo(ctx, *, who: str = None):
     """
-    ใช้ได้ทั้ง:
-      - $userinfo                 → โชว์ของตัวเอง (ผู้สั่ง)
-      - $userinfo @someone        → โชว์ของคนที่เมนชัน
-      - $userinfo 1234567890123   → โชว์จาก user id / ชื่อ
+    $userinfo
+    $userinfo @someone
+    $userinfo 123456789012345678
     """
     try:
-        # 1) mentions มาก่อน
+        # --------- หา member จาก mention / converter / fallback ----------
         member = None
         if ctx.message.mentions:
             member = ctx.message.mentions[0]
         elif who:
-            # 2) พยายามแปลงสตริงเป็น Member (id / mention / ชื่อ)
             try:
                 member = await commands.MemberConverter().convert(ctx, who)
             except commands.BadArgument:
                 member = None
-        # 3) ไม่ระบุอะไรเลย → ใช้คนสั่ง
         if member is None:
             member = ctx.author
 
+        # --------- หา approval channel ----------
         channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
         if not channel:
             await ctx.send("❌ APPROVAL_CHANNEL_ID not found.")
             return
 
-        async for message in channel.history(limit=200):
-            if (
-                message.author == bot.user
-                and message.embeds
-                and message.mentions
-                and member in message.mentions
-            ):
-                embed0 = message.embeds[0]
-                new_embed = copy_embed_fields(embed0)
+        # --------- อ่านประวัติแบบมีการจับสิทธิ์ ----------
+        try:
+            async for message in channel.history(limit=200):
+                if (
+                    message.author == bot.user
+                    and message.embeds
+                    and message.mentions
+                    and member in message.mentions
+                ):
+                    embed0 = message.embeds[0]
+                    new_embed = copy_embed_fields(embed0)
 
-                if message.attachments:
-                    try:
-                        att = message.attachments[0]
-                        data = await att.read()
-                        fname = att.filename or f"avatar_{member.id}.png"
-                        file = discord.File(io.BytesIO(data), filename=fname)
-                        new_embed.set_thumbnail(url=f"attachment://{fname}")
-                        await ctx.send(file=file, embed=new_embed)
-                        return
-                    except Exception:
-                        pass
+                    # แนบรูปเดิมถ้ามี (ไม่สำเร็จก็ส่ง embed อย่างเดียว)
+                    if message.attachments:
+                        try:
+                            att = message.attachments[0]
+                            data = await att.read()
+                            fname = att.filename or f"avatar_{member.id}.png"
+                            file = discord.File(io.BytesIO(data), filename=fname)
+                            new_embed.set_thumbnail(url=f"attachment://{fname}")
+                            await ctx.send(file=file, embed=new_embed)
+                            return
+                        except Exception:
+                            pass
 
-                await ctx.send(embed=new_embed)
-                return
+                    await ctx.send(embed=new_embed)
+                    return
+
+        except discord.Forbidden:
+            await ctx.send(
+                "❌ บอทไม่มีสิทธิ์อ่านห้องอนุมัติ\n"
+                "→ ต้องเปิดสิทธิ์ **View Channel** และ **Read Message History** ให้บอทในห้องนั้น"
+            )
+            return
+        except discord.HTTPException as e:
+            await ctx.send(f"❌ อ่านประวัติห้องอนุมัติไม่สำเร็จ (HTTP): {e}")
+            return
 
         await ctx.send("❌ No verification info found for this user.")
+
     except Exception as e:
+        # ช่วย debug ให้เห็น error จริง (ชั่วคราว)
         await notify_admin(ctx.guild, f"userinfo error: {e!r}")
-        await ctx.send("❌ คำสั่งล้มเหลว")
+        await ctx.send(f"❌ คำสั่งล้มเหลว: {e!r}")
 
 # ---------- Single user refresh ----------
 @bot.command(name="refresh_age")

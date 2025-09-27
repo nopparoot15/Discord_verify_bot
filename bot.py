@@ -623,12 +623,12 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
             # --- Validate nickname (if provided) ---
             nick = (self.name.value or "").strip()
-            if len(nick) < 2 or len(nick) > 32 \
+            if len(nick) < 2 or len(nick) > 10 \
                or any(ch.isdigit() for ch in nick) \
                or any(c in INVALID_CHARS for c in nick) \
                or contains_emoji(nick):
                 await interaction.followup.send(
-                    "❌ Nickname invalid (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ และต้องระบุ)",
+                    "❌ Nickname invalid (ต้องเป็นตัวอักษร 2–10 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ และต้องระบุ)",
                     ephemeral=True
                 )
                 return
@@ -882,12 +882,11 @@ async def verify_embed(ctx):
         await ctx.send("❌ ส่ง embed ไม่สำเร็จ")
 
 @bot.command(name="userinfo")
-@commands.has_permissions(administrator=True)
 async def userinfo(ctx, *, who: str = None):
     """
-    $userinfo
-    $userinfo @someone
-    $userinfo 123456789012345678
+    $userinfo                → ดู ID Card ของตัวเอง (ทุกคนใช้ได้)
+    $userinfo @someone       → ดู ID Card ของคนอื่น (แอดมินเท่านั้น)
+    $userinfo 12345678901234 → ดู ID Card ของคนอื่นจาก ID (แอดมินเท่านั้น)
     """
     try:
         # ---------- หา member ----------
@@ -901,6 +900,11 @@ async def userinfo(ctx, *, who: str = None):
                 member = None
         if member is None:
             member = ctx.author
+
+        # ---------- ถ้าไม่ใช่ตัวเอง ต้องเป็นแอดมิน ----------
+        if member.id != ctx.author.id and not ctx.author.guild_permissions.administrator:
+            await ctx.send("❌ คุณสามารถดูบัตรของ **ตัวเอง** ได้เท่านั้น")
+            return
 
         # ---------- หา approval channel ----------
         channel = ctx.guild.get_channel(APPROVAL_CHANNEL_ID)
@@ -1080,9 +1084,9 @@ async def setnick(ctx: commands.Context, member: discord.Member, *, nickname: st
             return
 
         # validate ชื่อเล่น
-        if len(nickname) < 2 or len(nickname) > 32 or any(ch.isdigit() for ch in nickname) \
+        if len(nickname) < 2 or len(nickname) > 10 or any(ch.isdigit() for ch in nickname) \
            or any(c in INVALID_CHARS for c in nickname) or contains_emoji(nickname):
-            await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–32 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
+            await ctx.send("❌ ชื่อเล่นไม่ถูกต้อง (ต้องเป็นตัวอักษร 2–10 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ)")
             return
         if _canon_full(nickname) in _discord_names_set(member):
             await ctx.send("❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของเป้าหมายจริง ๆ")
@@ -1247,7 +1251,7 @@ except Exception:
 _SHORT_DESC = {
     "help": "แสดงรายการคำสั่งทั้งหมด หรือรายละเอียดของคำสั่งที่ระบุ",
     "verify_embed": "ส่ง Embed ปุ่มยืนยันตัวตนไปยังห้อง VERIFY_CHANNEL_ID",
-    "userinfo": "แสดงข้อมูลยืนยันล่าสุดของสมาชิกจากห้องอนุมัติ",
+    "userinfo": "ดู ID Card ของตัวเอง; ดูของคนอื่นได้เฉพาะแอดมิน",
     "refresh_age": "อัปเดตยศอายุตามเวลาที่ผ่านไป (รายบุคคล)",
     "refresh_age_all": "อัปเดตยศอายุทั้งเซิร์ฟเวอร์ตาม logs",
     "setnick": "ตั้ง/ลบ วงเล็บชื่อเล่น ต่อท้ายชื่อดิสของสมาชิก",
@@ -1268,9 +1272,9 @@ _HELP_DETAILS = {
         "note": "ต้องมีสิทธิ์ Administrator",
     },
     "userinfo": {
-        "usage": "$userinfo @สมาชิก",
-        "example": "$userinfo @Alice",
-        "note": "ดึง embed คำขอยืนยันล่าสุดจากห้องอนุมัติ",
+        "usage": "$userinfo\n$userinfo @สมาชิก\n$userinfo <user_id>",
+        "example": "$userinfo\n$userinfo @Alice\n$userinfo 123456789012345678",
+        "note": "ทุกคนดูบัตรของตัวเองได้ด้วย `$userinfo`; การดูบัตรของคนอื่น (ระบุ @สมาชิก หรือ ID) ทำได้เฉพาะแอดมิน • ดึงข้อมูลจากห้องอนุมัติ",
     },
     "refresh_age": {
         "usage": "$refresh_age @สมาชิก",
@@ -1289,7 +1293,7 @@ _HELP_DETAILS = {
     },
     "setgender": {
         "usage": "$setgender @สมาชิก [เพศ]",
-        "example": "$setgender @Alice หญิง\n$setgender @Bob ไม่ระบุ",
+        "example": "$setgender @Alice หญิง\n$userinfo @Bob ไม่ระบุ",
         "note": "ต้อง Manage Roles; เว้นว่าง = ไม่ระบุ",
     },
     "setage": {
@@ -1304,7 +1308,7 @@ _HELP_DETAILS = {
     },
 }
 
-_ADMIN_COMMANDS = {"verify_embed", "userinfo", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage", "reverify"}
+_ADMIN_COMMANDS = {"verify_embed", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage", "reverify"}
 
 def _fmt_cmd_list(prefix: str, names: list[str]) -> str:
     lines = []

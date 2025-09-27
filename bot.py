@@ -310,20 +310,20 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
         icon = getattr(src.author, "icon_url", None)
         url = getattr(src.author, "url", None)
         if name or icon or url:
-            e.set_author(name=name or discord.Embed.Empty,
-                         icon_url=icon or discord.Embed.Empty,
-                         url=url or discord.Embed.Empty)
+            # เปลี่ยนจาก discord.Embed.Empty → None
+            e.set_author(name=name or None, icon_url=icon or None, url=url or None)
     if getattr(src, "footer", None):
         text = getattr(src.footer, "text", None)
         icon = getattr(src.footer, "icon_url", None)
         if text or icon:
-            e.set_footer(text=text or discord.Embed.Empty,
-                         icon_url=icon or discord.Embed.Empty)
+            # เปลี่ยนจาก discord.Embed.Empty → None
+            e.set_footer(text=text or None, icon_url=icon or None)
     if src.image and src.image.url:
         e.set_image(url=src.image.url)
     for f in src.fields:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
     return e
+
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     base = (

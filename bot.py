@@ -208,10 +208,14 @@ _LGBT_ALIASES_RAW = {
     "trans", "transgender",
     "genderqueer", "bigender", "agender", "genderfluid",
     "queer", "other",
-    "เพศทางเลือก", "สาวสอง", "สาวประเภทสอง", "ทอม", "ดี้", "ไบ",
+    "เกย์", "เกย", "เกย์ชาย", "เกย์หญิง",
+    "เลส", "เลสเบี้ยน", "เลสเบียน",
+    "ไบ", "ไบเซ็กชวล", "แพน", "แพนเซ็กชวล",
+    "เพศทางเลือก", "สาวสอง", "สาวประเภทสอง", "ทอม", "ดี้",
     "非二元", "跨性别", "酷儿",
     "ノンバイナリー", "xジェンダー", "トランス", "クィア",
     "논바이너리", "트랜스", "퀴어",
+    "gay", "lesbian", "bi", "bisexual", "pan", "pansexual",
 }
 _GENDER_UNDISCLOSED_ALIASES_RAW = {
     "ไม่ระบุ", "ไม่ระบุเพศ", "ไม่อยากเปิดเผย", "ไม่สะดวก", "ไม่สะดวกกรอก", "ไม่บอก",
@@ -246,11 +250,11 @@ def resolve_gender_role_id(text: str) -> int:
         return ROLE_MALE
     if t in FEMALE_ALIASES or any(t.startswith(p) for p in FEMALE_PREFIXES):
         return ROLE_FEMALE
-    if t in GENDER_UNDISCLOSED_ALIASES:
-        return ROLE_GENDER_UNDISCLOSED
     if t in LGBT_ALIASES:
         return ROLE_LGBT
-    return ROLE_GENDER_UNDISCLOSED  # ค่าอื่น/ว่าง → ไม่ระบุเพศ
+    if t in GENDER_UNDISCLOSED_ALIASES:
+        return ROLE_GENDER_UNDISCLOSED
+    return ROLE_GENDER_UNDISCLOSED
 
 def resolve_age_role_id(age_text: str) -> int | None:
     if is_age_undisclosed(age_text):

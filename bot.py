@@ -572,11 +572,11 @@ def build_account_check_field(user: discord.User) -> tuple[str, str, str, int | 
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
-        label="Nickname / ชื่อเล่น (จำเป็นต้องระบุ)",
-        placeholder="ชื่อเล่น 2–10 ตัวอักษร (ห้ามเว้นว่าง)",
+        label="Nickname / ชื่อเล่น (ปล่อยว่าง = ไม่ระบุ)",
+        placeholder="ตัวอักษร 2–10 (เว้นว่างได้)",
         style=discord.TextStyle.short,
-        min_length=2, max_length=10,   
-        required=True                  
+        min_length=0, max_length=10,   
+        required=False                 
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (ปล่อยว่าง = ไม่ระบุ)",
@@ -627,21 +627,24 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
             # --- Validate nickname (if provided) ---
             nick = (self.name.value or "").strip()
-            if len(nick) < 2 or len(nick) > 10 \
-               or any(ch.isdigit() for ch in nick) \
-               or any(c in INVALID_CHARS for c in nick) \
-               or contains_emoji(nick):
-                await interaction.followup.send(
-                    "❌ Nickname invalid (ต้องเป็นตัวอักษร 2–10 ตัว, ห้ามตัวเลข/สัญลักษณ์/อีโมจิ และต้องระบุ)",
-                    ephemeral=True
-                )
-                return
-            if _canon_full(nick) in _discord_names_set(interaction.user):
-                await interaction.followup.send(
-                    "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ",
-                    ephemeral=True
-                )
-                return
+            if nick:  # ✅ ตรวจเฉพาะถ้าไม่เว้นว่าง
+                if len(nick) < 2 or len(nick) > 10 \
+                   or any(ch.isdigit() for ch in nick) \
+                   or any(c in INVALID_CHARS for c in nick) \
+                   or contains_emoji(nick):
+                    await interaction.followup.send(
+                        "❌ Nickname invalid (ต้องเป็นตัวอักษร 2–10 ตัว และห้ามตัวเลข/สัญลักษณ์/อีโมจิ)\n"
+                        "หากไม่ต้องการตั้งชื่อเล่น สามารถเว้นว่างได้",
+                        ephemeral=True
+                    )
+                    return
+                if _canon_full(nick) in _discord_names_set(interaction.user):
+                    await interaction.followup.send(
+                        "❌ ชื่อเล่นต้องต่างจากชื่อในดิสคอร์ดของคุณจริง ๆ\n"
+                        "หากไม่ต้องการตั้งชื่อเล่น สามารถเว้นว่างได้",
+                        ephemeral=True
+                    )
+                    return
 
             # --- Validate gender (text only when provided) ---
             gender_raw = (self.gender.value or "")
@@ -654,7 +657,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             pending_verifications.add(interaction.user.id)
 
             # Prepare embed fields
-            display_nick = nick
+            display_nick = nick if nick else "ไม่ระบุ"
             display_age = (age_raw if age_raw else "ไม่ระบุ")
             display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
 

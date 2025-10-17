@@ -37,7 +37,8 @@ ROLE_60_64  = 1418704072617496666
 ROLE_65_UP  = 1418704076119736390
 ROLE_AGE_UNDISCLOSED = 1419045340576747663
 
-APPEND_FORM_NAME_TO_NICK = True
+# ✅ ปิดการเติมวงเล็บชื่อเล่นอัตโนมัติ (เก็บไว้ใน ID Card อย่างเดียว)
+APPEND_FORM_NAME_TO_NICK = False
 
 # ====== AUTO REFRESH CONFIG (ตั้งเวลาเองได้) ======
 AUTO_REFRESH_ENABLED = True
@@ -53,6 +54,16 @@ REFRESH_AT_WEEKDAY = 0                     # ใช้กับ WEEKLY (0=Mon ..
 ACCOUNT_RISK_ENABLED = True
 MIN_ACCOUNT_AGE_DAYS_HIGH = 3    # < 3 วัน = HIGH
 MIN_ACCOUNT_AGE_DAYS_MED  = 7    # < 7 วัน = MED (และ >= 3)
+
+# ====== BIRTHDAY NOTIFY CONFIG ======
+BIRTHDAY_CHANNEL_ID = 1323069987845312554  # ช่องสำหรับอวยพร HBD
+HBD_NOTIFY_ENABLED = True
+HBD_NOTIFY_HOUR = 9     # แจ้งเตือนกี่โมง (เวลาไทย)
+HBD_NOTIFY_MINUTE = 0
+
+# ====== PRIVACY CONFIG ======
+HIDE_BIRTHDAY_ON_IDCARD = True  # ซ่อนวันเกิดในบัตร ID Card
+BIRTHDAY_HIDDEN_TEXT = "ไม่แสดง"
 
 # ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
@@ -321,11 +332,26 @@ def copy_embed_fields(src: discord.Embed) -> discord.Embed:
             e.set_footer(text=text or None, icon_url=icon or None)
     if src.image and src.image.url:
         e.set_image(url=src.image.url)
-    if src.thumbnail and src.thumbnail.url:   # ✅ เพิ่มส่วนนี้
+    if src.thumbnail and src.thumbnail.url:
         e.set_thumbnail(url=src.thumbnail.url)
     for f in src.fields:
         e.add_field(name=f.name, value=f.value, inline=f.inline)
     return e
+
+def mask_birthday_field_for_idcard(e: discord.Embed):
+    """
+    ปิดบังวันเกิดบน ID Card (ผู้ใช้เห็น) แต่ยังเก็บจริงไว้ใน embed ห้องอนุมัติ
+    ถ้าจะลบช่องออก ให้ใช้ e.remove_field(i) แทน set_field_at
+    """
+    try:
+        for i, f in enumerate(e.fields):
+            nm = (f.name or "").lower()
+            if ("birthday" in nm) or ("วันเกิด" in nm):
+                if HIDE_BIRTHDAY_ON_IDCARD:
+                    e.set_field_at(i, name=f.name, value=BIRTHDAY_HIDDEN_TEXT, inline=False)
+                break
+    except Exception:
+        pass
 
 def build_parenthesized_nick(member: discord.Member, form_name: str) -> str:
     base = (
@@ -376,6 +402,37 @@ def _years_between(a: datetime, b: datetime) -> int:
     if (b.month, b.day) < (a.month, a.day):
         years -= 1
     return max(years, 0)
+
+# ====== Birthday helpers (optional) ======
+_BDAY_RE = re.compile(r"^\s*(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{4})\s*$")
+
+def parse_birthday(text: str) -> datetime | None:
+    """
+    รับรูปแบบ dd/mm/yyyy, dd-mm-yyyy, dd.mm.yyyy
+    คืนค่า datetime(tz=Asia/Bangkok) เวลา 00:00 ถ้าถูกต้อง
+    """
+    if not text:
+        return None
+    m = _BDAY_RE.match(text)
+    if not m:
+        return None
+    d, mth, y = map(int, m.groups())
+    try:
+        dt = datetime(y, mth, d, 0, 0, tzinfo=timezone(timedelta(hours=7)))
+    except ValueError:
+        return None
+    # ห้ามอนาคต
+    now = datetime.now(timezone(timedelta(hours=7)))
+    if dt > now:
+        return None
+    # guard ปีสมเหตุสมผล
+    if y < 1900 or y > now.year:
+        return None
+    return dt
+
+def age_from_birthday(bday: datetime, now_local: datetime | None = None) -> int:
+    now_local = now_local or datetime.now(timezone(timedelta(hours=7)))
+    return _years_between(bday, now_local)
 
 async def _latest_verification_embed_for(member: discord.Member) -> discord.Embed | None:
     channel = member.guild.get_channel(APPROVAL_CHANNEL_ID)
@@ -432,6 +489,28 @@ async def _run_full_age_refresh(guild: discord.Guild):
     error_lines = []
 
     for member, embed in candidates:
+        # ✅ PRIORITY: birthday
+        bday_text = _find_embed_field(embed, "birthday", "วันเกิด")
+        if bday_text:
+            bday_dt = parse_birthday(str(bday_text))
+            if bday_dt:
+                years = age_from_birthday(bday_dt, now)
+                new_role_id = resolve_age_role_id(str(years))
+                new_role = guild.get_role(new_role_id) if new_role_id else None
+                to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_role is None or r.id != new_role.id)]
+                try:
+                    if to_remove:
+                        await member.remove_roles(*to_remove, reason=f"Age refresh (birthday) → now {years}")
+                    if new_role and new_role not in member.roles:
+                        await member.add_roles(new_role, reason=f"Age refresh (birthday) → now {years}")
+                    old_names = ", ".join(r.name for r in to_remove) if to_remove else "—"
+                    changed_lines.append(f"✅ {member.mention}: {years} ปี (จากวันเกิด) → {new_role.name if new_role else '—'} (removed: {old_names})")
+                except discord.Forbidden:
+                    error_lines.append(f"❌ {member.mention}: ปรับยศจากวันเกิดไม่สำเร็จ (สิทธิ์)")
+                except discord.HTTPException:
+                    error_lines.append(f"❌ {member.mention}: ปรับยศจากวันเกิดไม่สำเร็จ (HTTP)")
+                continue  # ใช้วันเกิดแล้ว ข้ามไปคนถัดไป
+
         age_text = _find_embed_field(embed, "age", "อายุ")
         sent_text = _find_embed_field(embed, "sent at")
         if not age_text or not sent_text:
@@ -522,7 +601,8 @@ def _set_or_add_field(embed: discord.Embed, name_keys: tuple[str, ...], display_
 async def _update_approval_embed_for_member(guild: discord.Guild, member: discord.Member, *,
                                             nickname: str | None = None,
                                             age: str | None = None,
-                                            gender: str | None = None) -> bool:
+                                            gender: str | None = None,
+                                            birthday: str | None = None) -> bool:
     msg = await _find_latest_approval_message(guild, member)
     if not msg:
         return False
@@ -533,6 +613,8 @@ async def _update_approval_embed_for_member(guild: discord.Guild, member: discor
         _set_or_add_field(e, ("age", "อายุ"), "Age / อายุ", age or "ไม่ระบุ")
     if gender is not None:
         _set_or_add_field(e, ("gender", "เพศ"), "Gender / เพศ", gender or "ไม่ระบุ")
+    if birthday is not None:
+        _set_or_add_field(e, ("birthday", "วันเกิด"), "Birthday / วันเกิด", birthday or "ไม่ระบุ")
     try:
         await msg.edit(embed=e)
         return True
@@ -575,8 +657,8 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         label="Nickname / ชื่อเล่น (ปล่อยว่าง = ไม่ระบุ)",
         placeholder="ตัวอักษร 2–10 (เว้นว่างได้)",
         style=discord.TextStyle.short,
-        min_length=0, max_length=10,   
-        required=False                 
+        min_length=0, max_length=10,
+        required=False
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (ปล่อยว่าง = ไม่ระบุ)",
@@ -589,6 +671,13 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         placeholder='เช่น ชาย / หญิง / LGBT',
         style=discord.TextStyle.short,
         min_length=0, required=False
+    )
+    # ✅ NEW: Birthday (optional)
+    birthday = discord.ui.TextInput(
+        label="Birthday / วันเกิด (ไม่บังคับ, dd/mm/yyyy)",
+        placeholder="เช่น 12/09/2003",
+        style=discord.TextStyle.short,
+        min_length=0, max_length=10, required=False
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -627,7 +716,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
             # --- Validate nickname (if provided) ---
             nick = (self.name.value or "").strip()
-            if nick:  # ✅ ตรวจเฉพาะถ้าไม่เว้นว่าง
+            if nick:  # ตรวจเฉพาะถ้าไม่เว้นว่าง
                 if len(nick) < 2 or len(nick) > 10 \
                    or any(ch.isdigit() for ch in nick) \
                    or any(c in INVALID_CHARS for c in nick) \
@@ -654,12 +743,26 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                         await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
                         return
 
+            # --- ✅ Validate birthday (optional) ---
+            birthday_raw = (self.birthday.value or "").strip()
+            bday_dt = None
+            if birthday_raw:
+                bday_dt = parse_birthday(birthday_raw)
+                if not bday_dt:
+                    await interaction.followup.send(
+                        "❌ รูปแบบวันเกิดไม่ถูกต้อง (ใช้ dd/mm/yyyy เช่น 05/11/2004)\n"
+                        "• อนุญาตตัวคั่น / หรือ - หรือ .",
+                        ephemeral=True
+                    )
+                    return
+
             pending_verifications.add(interaction.user.id)
 
-            # Prepare embed fields
+            # Prepare embed fields (เพิ่ม Birthday)
             display_nick = nick if nick else "ไม่ระบุ"
             display_age = (age_raw if age_raw else "ไม่ระบุ")
             display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
+            display_birthday = birthday_raw if birthday_raw else "ไม่ระบุ"
 
             embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
             thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
@@ -667,6 +770,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
             embed.add_field(name="Age / อายุ", value=display_age, inline=False)
             embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
+            embed.add_field(name="Birthday / วันเกิด", value=display_birthday, inline=False)  # ✅ NEW
 
             # Account risk (age only)
             if ACCOUNT_RISK_ENABLED:
@@ -690,6 +794,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 gender_text=gender_raw,
                 age_text=age_raw if age_raw else "ไม่ระบุ",
                 form_name=nick,
+                birthday_text=birthday_raw  # ✅ ส่งต่อ
             )
             await channel.send(
                 content=interaction.user.mention,
@@ -730,12 +835,13 @@ class VerificationView(discord.ui.View):
         await interaction.response.send_modal(VerificationForm())
 
 class ApproveRejectView(discord.ui.View):
-    def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str):
+    def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str, birthday_text: str = ""):
         super().__init__(timeout=None)
         self.user = user
         self.gender_text = (gender_text or "").strip()
         self.age_text = (age_text or "").strip()
         self.form_name = (form_name or "").strip()
+        self.birthday_text = (birthday_text or "").strip()  # ✅ NEW
 
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -746,8 +852,19 @@ class ApproveRejectView(discord.ui.View):
             member = interaction.guild.get_member(self.user.id) or await interaction.guild.fetch_member(self.user.id)
             general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
             gender_role = interaction.guild.get_role(resolve_gender_role_id(self.gender_text))
-            age_role_id = resolve_age_role_id(self.age_text)
-            age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
+
+            # ✅ คิดยศอายุจากวันเกิดก่อน ถ้าไม่มี/ไม่ถูกต้อง ค่อย fallback เป็น age_text
+            age_role = None
+            if self.birthday_text:
+                bday_dt = parse_birthday(self.birthday_text)
+                if bday_dt:
+                    years = age_from_birthday(bday_dt)
+                    age_role_id = resolve_age_role_id(str(years))
+                    age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
+
+            if age_role is None:
+                age_role_id = resolve_age_role_id(self.age_text)
+                age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
 
             if not (member and general_role and gender_role):
                 await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
@@ -786,17 +903,8 @@ class ApproveRejectView(discord.ui.View):
                     await notify_admin(interaction.guild, f"บอทให้ยศไม่สำเร็จที่ {member.mention}")
                     return
 
-            # วงเล็บชื่อเล่น: ทำเฉพาะเมื่อกรอกชื่อเล่นมาเท่านั้น
-            if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                bot_me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
-                try:
-                    if bot_me and bot_me.guild_permissions.manage_nicknames and bot_me.top_role > member.top_role and member.guild.owner_id != member.id:
-                        new_nick = build_parenthesized_nick(member, self.form_name)
-                        current_nick = member.nick or ""
-                        if new_nick and new_nick != current_nick:
-                            await member.edit(nick=new_nick, reason="Verification: append form nickname")
-                except Exception:
-                    pass
+            # ❌ ไม่แตะชื่อดิสอีกต่อไป (APPEND_FORM_NAME_TO_NICK=False)
+            # วงเล็บชื่อเล่น: ถ้าอยากกลับมาใช้ ให้ตั้ง APPEND_FORM_NAME_TO_NICK=True
 
             pending_verifications.discard(self.user.id)
         except Exception as e:
@@ -932,6 +1040,9 @@ async def userinfo(ctx, *, who: str = None):
                     new_embed = copy_embed_fields(embed0)
                     new_embed.title = "🪪 ID Card / บัตรยืนยันตัวตน"
 
+                    # ✅ ซ่อนวันเกิดบน ID Card
+                    mask_birthday_field_for_idcard(new_embed)
+
                     if message.attachments:
                         try:
                             att = message.attachments[0]
@@ -963,7 +1074,6 @@ async def userinfo(ctx, *, who: str = None):
         await notify_admin(ctx.guild, f"userinfo error: {e!r}")
         await ctx.send(f"❌ คำสั่งล้มเหลว: {e!r}")
 
-
 # ---------- Single user refresh ----------
 @bot.command(name="refresh_age")
 @commands.has_permissions(administrator=True)
@@ -973,6 +1083,31 @@ async def refresh_age(ctx, member: discord.Member):
         if not embed:
             await ctx.send("❌ ไม่พบข้อมูลคำขอยืนยันล่าสุดของผู้ใช้นี้ในห้องอนุมัติ")
             return
+
+        # ✅ PRIORITY: birthday
+        bday_text = _find_embed_field(embed, "birthday", "วันเกิด")
+        if bday_text:
+            bday_dt = parse_birthday(str(bday_text))
+            if bday_dt:
+                years = age_from_birthday(bday_dt)
+                new_age_role_id = resolve_age_role_id(str(years))
+                new_age_role = ctx.guild.get_role(new_age_role_id) if new_age_role_id else None
+                to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and (new_age_role is None or r.id != new_age_role.id)]
+                if to_remove:
+                    try:
+                        await member.remove_roles(*to_remove, reason=f"Refresh age (birthday) → now {years}")
+                    except discord.Forbidden:
+                        await ctx.send("❌ ไม่มีสิทธิ์ถอดยศอายุของสมาชิกคนนี้")
+                        return
+                if new_age_role and new_age_role not in member.roles:
+                    try:
+                        await member.add_roles(new_age_role, reason=f"Refresh age (birthday) → now {years}")
+                    except discord.Forbidden:
+                        await ctx.send(f"⚠️ ถอดยศเดิมแล้ว แต่เพิ่มยศใหม่ไม่สำเร็จ: {new_age_role.name}")
+                        return
+                got = new_age_role.name if new_age_role else "— (ไม่มี role สำหรับช่วงนี้)"
+                await ctx.send(f"✅ (วันเกิด) อัปเดตอายุเป็น **{years}** ปี และตั้งยศอายุเป็น **{got}** ให้กับ {member.mention} แล้ว")
+                return
 
         age_text = _find_embed_field(embed, "age", "อายุ")
         sent_text = _find_embed_field(embed, "sent at")
@@ -1201,6 +1336,64 @@ async def setage(ctx: commands.Context, member: discord.Member, *, age_text: str
         await notify_admin(ctx.guild, f"setage error: {e!r}")
         await ctx.send("❌ คำสั่งล้มเหลว")
 
+@bot.command(name="setbirthday", aliases=["birthday", "วันเกิด", "ปรับวันเกิด"])
+@commands.has_permissions(manage_roles=True)
+async def setbirthday(ctx: commands.Context, member: discord.Member, *, birthday_text: str = ""):
+    """
+    ตั้ง/ลบ วันเกิด ของสมาชิกใน embed อนุมัติ และอัปเดตยศอายุตามวันเกิดทันที
+    ใช้รูปแบบ dd/mm/yyyy หรือ clear/reset/remove เพื่อลบ
+    """
+    try:
+        want_clear = (_norm_simple(birthday_text) in CLEAR_ALIASES) or (birthday_text.strip() == "")
+        if want_clear:
+            ok = await _update_approval_embed_for_member(ctx.guild, member, birthday="ไม่ระบุ")
+            if not ok:
+                await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ")
+                return
+            await ctx.send(f"✅ ลบวันเกิดของ {member.mention} แล้ว (ตั้งค่าเป็น 'ไม่ระบุ')")
+            return
+
+        bday_dt = parse_birthday(birthday_text)
+        if not bday_dt:
+            await ctx.send("❌ รูปแบบวันเกิดไม่ถูกต้อง (dd/mm/yyyy เช่น 05/11/2004)")
+            return
+
+        # อัปเดต embed
+        ok = await _update_approval_embed_for_member(ctx.guild, member, birthday=birthday_text)
+        if not ok:
+            await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ (แต่ยังอัปเดตยศได้)")
+
+        # จัดยศอายุจากวันเกิดทันที
+        years = age_from_birthday(bday_dt)
+        role_id = resolve_age_role_id(str(years))
+        role = ctx.guild.get_role(role_id) if role_id else None
+        if not role:
+            await ctx.send(f"⚠️ อายุ {years} ปี ไม่มี role ที่แมปไว้")
+            return
+
+        ok2, msg = _bot_can_edit_member_and_role(ctx, member, role)
+        if not ok2:
+            await ctx.send(msg); return
+        if not ctx.guild.me.guild_permissions.manage_roles:
+            await ctx.send("❌ บอทไม่มีสิทธิ์ Manage Roles"); return
+
+        to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != role.id]
+        try:
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Admin: set birthday (enforce single age role by birthday)")
+            if role not in member.roles:
+                await member.add_roles(role, reason="Admin: set birthday (age calculated)")
+        except discord.Forbidden:
+            await ctx.send("❌ บอทไม่มีสิทธิ์ปรับยศอายุให้สมาชิกคนนี้"); return
+        except discord.HTTPException:
+            await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศอายุ"); return
+
+        removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
+        await ctx.send(f"✅ ตั้งวันเกิด **{birthday_text}** → อายุ **{years}** ปี และตั้งยศเป็น **{role.name}** ให้ {member.mention} (removed: {removed_txt})")
+    except Exception as e:
+        await notify_admin(ctx.guild, f"setbirthday error: {e!r}")
+        await ctx.send("❌ คำสั่งล้มเหลว")
+
 # ---------- Force re-verification ----------
 @bot.command(name="reverify", aliases=["บังคับยืนยันใหม่", "forceverify"])
 @commands.has_permissions(manage_roles=True)
@@ -1261,10 +1454,12 @@ _SHORT_DESC = {
     "userinfo": "ดู ID Card ของตัวเอง; ดูของคนอื่นได้เฉพาะแอดมิน",
     "refresh_age": "อัปเดตยศอายุตามเวลาที่ผ่านไป (รายบุคคล)",
     "refresh_age_all": "อัปเดตยศอายุทั้งเซิร์ฟเวอร์ตาม logs",
-    "setnick": "ตั้ง/ลบ วงเล็บชื่อเล่น ต่อท้ายชื่อดิสของสมาชิก",
+    "setnick": "ตั้ง/ลบวงเล็บชื่อเล่นต่อท้าย (ระบบไม่ใส่อัตโนมัติแล้ว; ใช้เมื่อแอดมินอยากแก้เองเท่านั้น)",
     "setgender": "ตั้งยศเพศ (ชาย/หญิง/LGBT/ไม่ระบุ)",
     "setage": "ตั้งยศอายุ (กรอกตัวเลขหรือ 'ไม่ระบุ')",
+    "setbirthday": "ตั้ง/ลบ วันเกิด (คำนวณอายุอัตโนมัติจาก dd/mm/yyyy)",
     "reverify": "บังคับให้สมาชิกยืนยันตัวตนใหม่ (ลบ roles + ลบ embed + DM)",
+    "hbd_test": "ทดสอบส่ง HBD สำหรับคนที่เกิด 'วันนี้' ที่บอทรู้จัก",
 }
 
 _HELP_DETAILS = {
@@ -1281,22 +1476,22 @@ _HELP_DETAILS = {
     "userinfo": {
         "usage": "$userinfo\n$userinfo @สมาชิก\n$userinfo <user_id>",
         "example": "$userinfo\n$userinfo @Alice\n$userinfo 123456789012345678",
-        "note": "ทุกคนดูบัตรของตัวเองได้ด้วย `$userinfo`; การดูบัตรของคนอื่น (ระบุ @สมาชิก หรือ ID) ทำได้เฉพาะแอดมิน • ดึงข้อมูลจากห้องอนุมัติ",
+        "note": "ทุกคนดูบัตรของตัวเองได้ด้วย `$userinfo`; การดูบัตรของคนอื่น (ระบุ @สมาชิก หรือ ID) ทำได้เฉพาะแอดมิน • ดึงข้อมูลจากห้องอนุมัติ • วันเกิดถูกซ่อนบน ID Card ตามนโยบายความเป็นส่วนตัว",
     },
     "refresh_age": {
         "usage": "$refresh_age @สมาชิก",
         "example": "$refresh_age @Alice",
-        "note": "คำนวณอัตโนมัติจากเวลาในฟิลด์ 'Sent at' ของ embed",
+        "note": "คำนวณอัตโนมัติจาก 'วันเกิด' ถ้ามี; ถ้าไม่มีใช้ 'Age + Sent at'",
     },
     "refresh_age_all": {
         "usage": "$refresh_age_all",
         "example": "$refresh_age_all",
-        "note": "รันทั้งเซิร์ฟเวอร์และส่งผลลัพธ์ไปห้อง log",
+        "note": "รันทั้งเซิร์ฟเวอร์และส่งผลลัพธ์ไปห้อง log (ให้ความสำคัญวันเกิดก่อน)",
     },
     "setnick": {
         "usage": "$setnick @สมาชิก <ชื่อเล่น|clear>",
         "example": "$setnick @Alice มินนี่\n$setnick @Alice clear",
-        "note": "ต้อง Manage Nicknames; ใช้ clear/reset/remove/ลบ เพื่อลบวงเล็บ",
+        "note": "ระบบไม่เติมวงเล็บชื่อเล่นอัตโนมัติอีกแล้ว — ชื่อเล่นถูกเก็บใน ID Card เท่านั้น; ใช้คำสั่งนี้เฉพาะกรณีต้องแก้ชื่อด้วยมือ",
     },
     "setgender": {
         "usage": "$setgender @สมาชิก [เพศ]",
@@ -1308,14 +1503,24 @@ _HELP_DETAILS = {
         "example": "$setage @Alice 21\n$setage @Bob ไม่ระบุ\n$setage @Bob clear",
         "note": "ต้อง Manage Roles; ตัวเลขจัดเข้าช่วงอายุอัตโนมัติ",
     },
+    "setbirthday": {
+        "usage": "$setbirthday @สมาชิก <dd/mm/yyyy|clear>",
+        "example": "$setbirthday @Alice 05/11/2004\n$setbirthday @Alice clear",
+        "note": "ต้อง Manage Roles; จะอัปเดตยศอายุจากวันเกิดให้อัตโนมัติ และใช้แจ้ง HBD",
+    },
     "reverify": {
         "usage": "$reverify @สมาชิก",
         "example": "$reverify @Alice",
         "note": "ลบยศยืนยัน/อายุ/เพศ + ลบ embed ในห้องอนุมัติ + ส่ง DM ให้เริ่มใหม่",
     },
+    "hbd_test": {
+        "usage": "$hbd_test",
+        "example": "$hbd_test",
+        "note": "ทดสอบโพสต์ HBD วันนี้ในช่องที่ตั้งค่าไว้",
+    },
 }
 
-_ADMIN_COMMANDS = {"verify_embed", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage", "reverify"}
+_ADMIN_COMMANDS = {"verify_embed", "refresh_age", "refresh_age_all", "setnick", "setgender", "setage", "setbirthday", "reverify", "hbd_test"}
 
 def _fmt_cmd_list(prefix: str, names: list[str]) -> str:
     lines = []
@@ -1483,6 +1688,116 @@ async def _auto_refresh_daemon():
             # กัน daemon ล้ม
             pass
 
+# ====== Birthday (HBD) helpers & daemon ======
+def _local_today(tz: timezone) -> datetime:
+    now = datetime.now(tz)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+async def _already_sent_hbd_today(log_ch: discord.TextChannel, date_local: datetime, user_id: int) -> bool:
+    tag = f"[HBD {date_local.date().isoformat()}] {user_id}"
+    try:
+        async for m in log_ch.history(limit=200):
+            if m.author == bot.user and m.content and tag in m.content:
+                return True
+    except Exception:
+        pass
+    return False
+
+async def _mark_hbd_sent(log_ch: discord.TextChannel, date_local: datetime, user_id: int, member_mention: str):
+    try:
+        await log_ch.send(f"[HBD {date_local.date().isoformat()}] {user_id} • sent for {member_mention}")
+    except Exception:
+        pass
+
+async def _latest_birthday_index(guild: discord.Guild, limit: int = 2000) -> dict[int, datetime]:
+    ch = guild.get_channel(APPROVAL_CHANNEL_ID)
+    out: dict[int, datetime] = {}
+    if not ch:
+        return out
+    async for msg in ch.history(limit=limit):
+        if msg.author != bot.user or not msg.embeds or not msg.mentions:
+            continue
+        u = msg.mentions[0]
+        if not u:
+            continue
+        e = msg.embeds[0]
+        btxt = _find_embed_field(e, "birthday", "วันเกิด")
+        if btxt:
+            dt = parse_birthday(str(btxt))
+            if dt:
+                if u.id not in out:
+                    out[u.id] = dt
+    return out
+
+async def _send_hbd_today(guild: discord.Guild):
+    tz = REFRESH_TZ
+    today0 = _local_today(tz)
+    today_md = (today0.month, today0.day)
+
+    hbd_ch = guild.get_channel(BIRTHDAY_CHANNEL_ID)
+    log_ch = guild.get_channel(LOG_CHANNEL_ID)
+    if not hbd_ch or not log_ch:
+        return
+
+    bday_index = await _latest_birthday_index(guild)
+
+    for uid, bday_dt in bday_index.items():
+        if (bday_dt.month, bday_dt.day) != today_md:
+            continue
+        member = guild.get_member(uid)
+        if not member:
+            continue
+
+        if await _already_sent_hbd_today(log_ch, today0, uid):
+            continue
+
+        try:
+            await hbd_ch.send(
+                f"🎉🎂 **Happy Birthday** {member.mention}! "
+                f"ขอให้วันนี้เป็นวันดี ๆ มีความสุข สมหวัง และได้กินเค้กอร่อย ๆ นะ! 🥳"
+            )
+            await _mark_hbd_sent(log_ch, today0, uid, member.mention)
+        except discord.Forbidden:
+            await log_ch.send(f"❌ HBD: ไม่มีสิทธิ์โพสต์ที่ <#{BIRTHDAY_CHANNEL_ID}>")
+            return
+        except Exception as e:
+            await log_ch.send(f"❌ HBD ส่งไม่สำเร็จสำหรับ {member.mention}: {e!r}")
+
+def _compute_next_hbd_run_local(now_local: datetime) -> datetime:
+    target = now_local.replace(hour=HBD_NOTIFY_HOUR, minute=HBD_NOTIFY_MINUTE, second=0, microsecond=0)
+    if now_local >= target:
+        target = target + timedelta(days=1)
+    return target
+
+async def _birthday_daemon():
+    if not HBD_NOTIFY_ENABLED:
+        return
+    tz = REFRESH_TZ
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now_utc = datetime.now(timezone.utc)
+        now_local = now_utc.astimezone(tz)
+        target_local = _compute_next_hbd_run_local(now_local)
+        target_utc = target_local.astimezone(timezone.utc)
+        sleep_sec = max(1, int((target_utc - now_utc).total_seconds()))
+        try:
+            await asyncio.sleep(sleep_sec)
+        except asyncio.CancelledError:
+            return
+
+        try:
+            for guild in bot.guilds:
+                await _send_hbd_today(guild)
+        except Exception:
+            # กัน daemon ล้ม
+            pass
+
+@bot.command(name="hbd_test")
+@commands.has_permissions(administrator=True)
+async def hbd_test(ctx):
+    await _send_hbd_today(ctx.guild)
+    await ctx.send("✅ ลองส่ง HBD สำหรับวันและสมาชิกที่ตรงวันนี้แล้ว (ดูที่ช่อง HBD/Log)")
+
 # ====== Persistent View Loader ======
 @bot.event
 async def on_ready():
@@ -1491,6 +1806,10 @@ async def on_ready():
     if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
         bot.loop.create_task(_auto_refresh_daemon())
         bot._age_refresh_daemon_started = True
+    # ✅ Start birthday daemon once
+    if HBD_NOTIFY_ENABLED and not getattr(bot, "_birthday_daemon_started", False):
+        bot.loop.create_task(_birthday_daemon())
+        bot._birthday_daemon_started = True
 
 # ====== Run bot ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))

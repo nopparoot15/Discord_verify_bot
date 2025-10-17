@@ -65,6 +65,20 @@ HBD_NOTIFY_MINUTE = 0
 HIDE_BIRTHDAY_ON_IDCARD = True  # ซ่อนวันเกิดในบัตร ID Card
 BIRTHDAY_HIDDEN_TEXT = "ไม่แสดง"
 
+# ====== HBD MESSAGE ROTATION ======
+HBD_MESSAGES = [
+    "🎉🎂 สุขสันต์วันเกิด {mention}! ขอให้ปีนี้มีแต่สิ่งดี ๆ เข้ามา 🥳",
+    "✨🎂 HBD {mention}! สุขภาพแข็งแรง สมหวังทุกเรื่องนะ!",
+    "🥳🎉 Happy Birthday {mention}! ขอให้รอยยิ้มอยู่กับเธอทั้งปี",
+    "🎈🎂 สุขสันต์วันเกิดนะ {mention}! งานปัง เงินปั๊วะ ความสุขล้น ๆ",
+    "🍰🎉 HBD {mention}! ขอให้ทุกความพยายามสำเร็จสวยงาม",
+    "🌟🎂 Happy Birthday {mention}! ให้วันนี้พิเศษกว่าทุกวัน",
+    "🎁🎉 สุขสันต์วันเกิด {mention}! ขอให้สมหวังในสิ่งที่ตั้งใจ",
+    "🧁🎈 HBD {mention}! พักผ่อนให้พอ มีแรงลุยต่อทั้งปีนะ",
+    "🌈🎂 Happy Birthday {mention}! ขอให้โชคดีและมีแต่เรื่องดี ๆ",
+    "💫🎉 สุขสันต์วันเกิด {mention}! ให้ทุกวันเต็มไปด้วยพลังบวก",
+]
+
 # ====== DISCORD BOT SETUP ======
 intents = discord.Intents.default()
 intents.message_content = True
@@ -1729,6 +1743,26 @@ async def _latest_birthday_index(guild: discord.Guild, limit: int = 2000) -> dic
                     out[u.id] = dt
     return out
 
+async def _sync_age_role_from_birthday(guild: discord.Guild, member: discord.Member, bday_dt: datetime):
+    years = age_from_birthday(bday_dt)
+    role_id = resolve_age_role_id(str(years))
+    new_role = guild.get_role(role_id) if role_id else None
+    if not new_role:
+        return False, f"no mapped role for {years}"
+
+    to_remove = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != new_role.id]
+    try:
+        if to_remove:
+            await member.remove_roles(*to_remove, reason=f"Birthday update → now {years}")
+        if new_role not in member.roles:
+            await member.add_roles(new_role, reason=f"Birthday update → now {years}")
+        return True, new_role.name
+    except discord.Forbidden:
+        return False, "forbidden"
+    except discord.HTTPException:
+        return False, "http"
+
+
 async def _send_hbd_today(guild: discord.Guild):
     tz = REFRESH_TZ
     today0 = _local_today(tz)
@@ -1748,20 +1782,34 @@ async def _send_hbd_today(guild: discord.Guild):
         if not member:
             continue
 
+        ok_role, info = await _sync_age_role_from_birthday(guild, member, bday_dt)
+        if not ok_role:
+            await log_ch.send(f"⚠️ HBD: sync age role for {member.mention} failed ({info})")
+
         if await _already_sent_hbd_today(log_ch, today0, uid):
             continue
 
+        msg = _pick_hbd_message(member, today0)
+
         try:
-            await hbd_ch.send(
-                f"🎉🎂 **Happy Birthday** {member.mention}! "
-                f"ขอให้วันนี้เป็นวันดี ๆ มีความสุข สมหวัง และได้กินเค้กอร่อย ๆ นะ! 🥳"
-            )
+            await hbd_ch.send(msg)
             await _mark_hbd_sent(log_ch, today0, uid, member.mention)
         except discord.Forbidden:
             await log_ch.send(f"❌ HBD: ไม่มีสิทธิ์โพสต์ที่ <#{BIRTHDAY_CHANNEL_ID}>")
-            return
+            continue
         except Exception as e:
             await log_ch.send(f"❌ HBD ส่งไม่สำเร็จสำหรับ {member.mention}: {e!r}")
+            continue
+
+def _pick_hbd_message(member: discord.Member, when_local: datetime) -> str:
+    """
+    เลือกข้อความแบบหมุนเวียน: ใช้ (user_id + ปีปัจจุบัน) % จำนวนข้อความ
+    → คนเดิมแต่ละปีจะได้ข้อความที่ต่างออกไป
+    """
+    idx = ((member.id or 0) + when_local.year) % len(HBD_MESSAGES)
+    template = HBD_MESSAGES[idx]
+    return template.format(mention=member.mention)
+
 
 def _compute_next_hbd_run_local(now_local: datetime) -> datetime:
     target = now_local.replace(hour=HBD_NOTIFY_HOUR, minute=HBD_NOTIFY_MINUTE, second=0, microsecond=0)

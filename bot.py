@@ -1428,13 +1428,15 @@ async def setbirthday(ctx: commands.Context, member: discord.Member, *, birthday
             await ctx.send("❌ รูปแบบวันเกิดไม่ถูกต้อง (dd/mm/yyyy เช่น 05/11/2004)")
             return
 
-        # อัปเดต embed
+        # ✅ คำนวณก่อน แล้วค่อยอัปเดต embed + ยศ
+        years = age_from_birthday(bday_dt)
+
+        # อัปเดต embed (birthday + age ที่คำนวณจริง)
         ok = await _update_approval_embed_for_member(ctx.guild, member, birthday=birthday_text, age=str(years))
         if not ok:
             await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ (แต่ยังอัปเดตยศได้)")
 
         # จัดยศอายุจากวันเกิดทันที
-        years = age_from_birthday(bday_dt)
         role_id = resolve_age_role_id(str(years))
         role = ctx.guild.get_role(role_id) if role_id else None
         if not role:
@@ -1463,6 +1465,7 @@ async def setbirthday(ctx: commands.Context, member: discord.Member, *, birthday
     except Exception as e:
         await notify_admin(ctx.guild, f"setbirthday error: {e!r}")
         await ctx.send("❌ คำสั่งล้มเหลว")
+
 
 # ---------- Force re-verification ----------
 @bot.command(name="reverify", aliases=["บังคับยืนยันใหม่", "forceverify"])

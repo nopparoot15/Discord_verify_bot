@@ -311,6 +311,25 @@ def resolve_age_role_id(age_text: str) -> int | None:
 
 # ====== Helpers ======
 
+async def _has_any_pending_embed_for_user(bot: commands.Bot, user_id: int) -> bool:
+    try:
+        for guild in bot.guilds:
+            ch = guild.get_channel(APPROVAL_CHANNEL_ID)
+            if not ch:
+                continue
+            member = guild.get_member(user_id)
+            if not member:
+                # ถ้าไม่ใช่สมาชิกกิลด์นี้ก็ข้าม
+                continue
+            # ใช้ฟังก์ชันเดิมเพื่อหาข้อความล่าสุดของคนนี้
+            msg = await _find_latest_approval_message(guild, member)
+            if msg:
+                return True
+        return False
+    except Exception:
+        # ถ้ามี error ใด ๆ อย่าทำให้ล้มทั้งฟังก์ชัน — ถือว่า “ไม่เจอ”
+        return False
+
 _USERID_RE = re.compile(r"User ID:\s*(\d{17,20})")
 
 def _user_id_from_embed_footer(e: discord.Embed) -> int | None:
@@ -733,8 +752,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
-    
-            # ถ้ามียศแล้ว → กันส่งซ้ำ
+
             member = interaction.guild.get_member(interaction.user.id) or await interaction.guild.fetch_member(interaction.user.id)
             if member and any(r.id == ROLE_ID_TO_GIVE for r in member.roles):
                 await interaction.followup.send(
@@ -743,16 +761,21 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     ephemeral=True
                 )
                 return
-    
-            # กันกดฟอร์มซ้ำขณะรอแอดมิน
+
+            # PATCH: กันกดซ้ำ แต่ตรวจ 'ของจริง' ในห้องก่อน
             if interaction.user.id in pending_verifications:
-                await interaction.followup.send(
-                    "❗ You already submitted a verification request. Please wait for admin review.\n"
-                    "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
-                    ephemeral=True
-                )
-                return
-    
+                still_has = await _has_any_pending_embed_for_user(interaction.client, interaction.user.id)
+                if still_has:
+                    await interaction.followup.send(
+                        "❗ You already submitted a verification request. Please wait for admin review.\n"
+                        "❗ คุณได้ส่งคำขอไปแล้ว กรุณารอการอนุมัติจากแอดมิน",
+                        ephemeral=True
+                    )
+                    return
+                else:
+                    # PATCH: เคยค้างแต่ embed ถูกลบไปแล้ว → ล้างสถานะ เพื่อให้ส่งใหม่ได้
+                    pending_verifications.discard(interaction.user.id)
+
             # -------- validation --------
             age_raw = (self.age.value or "").strip()
             if not (age_raw == "" or re.fullmatch(r"\d{1,3}", age_raw) or is_age_undisclosed(age_raw)):
@@ -763,7 +786,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     ephemeral=True
                 )
                 return
-    
+
             nick = (self.name.value or "").strip()
             if nick:  # ตรวจเมื่อไม่ว่างเท่านั้น
                 if (
@@ -785,14 +808,14 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                         ephemeral=True
                     )
                     return
-    
+
             gender_raw = (self.gender.value or "")
             if gender_raw.strip():
                 if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
                     if any(ch.isdigit() for ch in gender_raw) or any(c in INVALID_CHARS for c in gender_raw) or contains_emoji(gender_raw):
                         await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
                         return
-    
+
             birthday_raw = (self.birthday.value or "").strip()
             if birthday_raw:
                 if not parse_birthday(birthday_raw):
@@ -802,67 +825,63 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                         ephemeral=True
                     )
                     return
-    
-            # mark pending (จะถูกล้างตอน Approve/Reject)
+
+            # PATCH: mark pending (จะถูกล้างตอน Approve/Reject)
             pending_verifications.add(interaction.user.id)
-    
+
             # -------- build embed --------
             display_nick = nick if nick else "ไม่ระบุ"
             display_age = (age_raw if age_raw else "ไม่ระบุ")
             display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
             display_birthday = birthday_raw if birthday_raw else "ไม่ระบุ"
-    
+
             embed = discord.Embed(
                 title="📋 Verification Request / คำขอยืนยันตัวตน",
                 color=discord.Color.orange()
             )
-    
-            file, fname = await build_avatar_attachment(interaction.user)
-            if file and fname:
-                embed.set_thumbnail(url=f"attachment://{fname}")
-            else:
-                # fallback เป็น URL ปัจจุบัน (ไม่มีไฟล์แนบ)
-                embed.set_thumbnail(url=interaction.user.display_avatar.with_static_format("png").with_size(128).url)
-    
+
+            # PATCH: ใช้ URL แทนไฟล์แนบเสมอ เพื่อให้ได้ thumbnail เล็กตลอด
+            thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
+            embed.set_thumbnail(url=thumb_url)
+
             embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
             embed.add_field(name="Age / อายุ", value=display_age, inline=False)
             embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
             embed.add_field(name="Birthday / วันเกิด", value=display_birthday, inline=False)
-    
+
             if ACCOUNT_RISK_ENABLED:
                 name, value, risk, age_days = build_account_check_field(interaction.user)
                 embed.add_field(name=name, value=value, inline=False)
                 if risk == "HIGH":
                     await notify_admin(interaction.guild, f"{interaction.user.mention} มีความเสี่ยงสูงจากอายุบัญชี ({age_days} วัน)")
-    
+
             now = datetime.now(timezone(timedelta(hours=7)))
             embed.add_field(name="📅 Sent at", value=now.strftime("%d/%m/%Y %H:%M"), inline=False)
             embed.set_footer(text=f"User ID: {interaction.user.id}")
-    
+
             # -------- send to approval channel with persistent view --------
             channel = interaction.guild.get_channel(APPROVAL_CHANNEL_ID)
             if not channel:
                 await notify_admin(interaction.guild, "ไม่พบห้อง APPROVAL_CHANNEL_ID")
                 await interaction.followup.send("⚠️ ระบบขัดข้อง: ไม่พบห้องอนุมัติ แจ้งแอดมินเรียบร้อย", ephemeral=True)
                 return
-    
-            # สำคัญ: ใช้ GlobalApproveRejectView() (ต้องถูก add_view ใน on_ready พร้อม timeout=None)
+
             view = GlobalApproveRejectView()
-    
+
             await channel.send(
-                content=interaction.user.mention,  # ถ้าไม่อยาก ping ให้ลบ content หรือใส่ users=False ด้านล่าง
+                content=interaction.user.mention,
                 embed=embed,
                 view=view,
-                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False),
-                **({"file": file} if file else {})
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False)
+                # PATCH: ไม่แนบไฟล์ เพื่อไม่ให้เกิดรูปใหญ่
             )
-    
+
             await interaction.followup.send(
                 "✅ Verification request submitted. Please wait for admin approval.\n"
                 "✅ ส่งคำขอยืนยันตัวตนแล้ว กรุณารอการอนุมัติจากแอดมิน",
                 ephemeral=True
             )
-    
+
         except Exception as e:
             pending_verifications.discard(interaction.user.id)
             await notify_admin(interaction.guild, f"เกิดข้อผิดพลาดตอนส่งแบบฟอร์มของ {interaction.user.mention}: {e!r}")
@@ -870,7 +889,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 await interaction.followup.send("❌ ระบบขัดข้อง กรุณาลองใหม่ภายหลัง", ephemeral=True)
             except Exception:
                 pass
-
 
 
 class VerificationView(discord.ui.View):
@@ -1690,6 +1708,31 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
         await ctx.send("❌ คำสั่งล้มเหลว")
 
 # ====== AUTO REFRESH DAEMON (configurable) ======
+
+PENDING_CLEANUP_INTERVAL_MIN = 10
+
+async def _pending_cleanup_daemon():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            # ทำสำเนาเพื่อ iterate ได้ปลอดภัย
+            stale_ids = []
+            for uid in list(pending_verifications):
+                has_msg = await _has_any_pending_embed_for_user(bot, uid)
+                if not has_msg:
+                    stale_ids.append(uid)
+            # ลบตัวที่ค้างจากเซ็ต
+            for uid in stale_ids:
+                pending_verifications.discard(uid)
+        except Exception:
+            # กัน daemon ล้ม
+            pass
+
+        try:
+            await asyncio.sleep(PENDING_CLEANUP_INTERVAL_MIN * 60)
+        except asyncio.CancelledError:
+            return
+
 def _refresh_period_tag(now_local: datetime, freq: str) -> str:
     if freq == "YEARLY":
         return f"[AGE-REFRESH] {now_local.year}"
@@ -1960,6 +2003,12 @@ async def on_ready():
     if HBD_NOTIFY_ENABLED and not getattr(bot, "_birthday_daemon_started", False):
         asyncio.create_task(_birthday_daemon())
         bot._birthday_daemon_started = True
+
+    # PATCH: start pending cleanup daemon
+    if not getattr(bot, "_pending_cleanup_started", False):
+        asyncio.create_task(_pending_cleanup_daemon())
+        bot._pending_cleanup_started = True
+
 
 # ====== Run bot ======
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))

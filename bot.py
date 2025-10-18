@@ -310,6 +310,27 @@ def resolve_age_role_id(age_text: str) -> int | None:
     return None
 
 # ====== Helpers ======
+
+_USERID_RE = re.compile(r"User ID:\s*(\d{17,20})")
+
+def _user_id_from_embed_footer(e: discord.Embed) -> int | None:
+    try:
+        ft = (e.footer.text or "")
+        m = _USERID_RE.search(ft)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+def _message_belongs_to_member(message: discord.Message, member: discord.Member) -> bool:
+    if message.mentions and member in message.mentions:
+        return True
+    try:
+        e = message.embeds[0]
+    except Exception:
+        return False
+    uid = _user_id_from_embed_footer(e)
+    return uid == member.id if uid is not None else False
+
 async def build_avatar_attachment(user: discord.User):
     try:
         asset = user.display_avatar
@@ -1091,8 +1112,7 @@ async def userinfo(ctx, *, who: str = None):
                 if (
                     message.author == bot.user
                     and message.embeds
-                    and message.mentions
-                    and member in message.mentions
+                    and _message_belongs_to_member(message, member)
                 ):
                     embed0 = message.embeds[0]
                     new_embed = copy_embed_fields(embed0)
@@ -1911,11 +1931,10 @@ async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     bot.add_view(VerificationView())
     if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
-        bot.loop.create_task(_auto_refresh_daemon())
+        asyncio.create_task(_auto_refresh_daemon())
         bot._age_refresh_daemon_started = True
-    # ✅ Start birthday daemon once
     if HBD_NOTIFY_ENABLED and not getattr(bot, "_birthday_daemon_started", False):
-        bot.loop.create_task(_birthday_daemon())
+        asyncio.create_task(_birthday_daemon())
         bot._birthday_daemon_started = True
 
 # ====== Run bot ======

@@ -1428,10 +1428,10 @@ async def setbirthday(ctx: commands.Context, member: discord.Member, *, birthday
             await ctx.send("❌ รูปแบบวันเกิดไม่ถูกต้อง (dd/mm/yyyy เช่น 05/11/2004)")
             return
 
-        # ✅ คำนวณก่อน แล้วค่อยอัปเดต embed + ยศ
+        # ✅ คำนวณอายุก่อน แล้วอัปเดตทั้ง embed และ role
         years = age_from_birthday(bday_dt)
 
-        # อัปเดต embed (birthday + age ที่คำนวณจริง)
+        # อัปเดต embed: birthday + age ที่คำนวณจริง
         ok = await _update_approval_embed_for_member(ctx.guild, member, birthday=birthday_text, age=str(years))
         if not ok:
             await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ (แต่ยังอัปเดตยศได้)")
@@ -1461,7 +1461,9 @@ async def setbirthday(ctx: commands.Context, member: discord.Member, *, birthday
             await ctx.send("❌ เกิดข้อผิดพลาด HTTP ตอนปรับยศอายุ"); return
 
         removed_txt = ", ".join(r.name for r in to_remove) if to_remove else "—"
-        await ctx.send(f"✅ ตั้งวันเกิด **{birthday_text}** → อายุ **{years}** ปี และตั้งยศเป็น **{role.name}** ให้ {member.mention} (removed: {removed_txt})")
+        await ctx.send(
+            f"✅ ตั้งวันเกิด **{birthday_text}** → อายุ **{years}** ปี และตั้งยศเป็น **{role.name}** ให้ {member.mention} (removed: {removed_txt})"
+        )
     except Exception as e:
         await notify_admin(ctx.guild, f"setbirthday error: {e!r}")
         await ctx.send("❌ คำสั่งล้มเหลว")

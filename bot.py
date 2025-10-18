@@ -477,7 +477,7 @@ async def _latest_verification_embed_for(member: discord.Member) -> discord.Embe
     if not channel:
         return None
     async for msg in channel.history(limit=500):
-        if msg.author == bot.user and msg.embeds and member in msg.mentions:
+        if msg.author == bot.user and msg.embeds and _message_belongs_to_member(msg, member):
             return msg.embeds[0]
     return None
 
@@ -837,7 +837,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 await interaction.followup.send("⚠️ ระบบขัดข้อง: ไม่พบห้องอนุมัติ แจ้งแอดมินเรียบร้อย", ephemeral=True)
                 return
 
-            view = ApproveRejectView(
+            view = GlobalApproveRejectView(
                 user=interaction.user,
                 gender_text=gender_raw,
                 age_text=age_raw if age_raw else "ไม่ระบุ",
@@ -885,178 +885,187 @@ class VerificationView(discord.ui.View):
 
         await interaction.response.send_modal(VerificationForm())
 
-class ApproveRejectView(discord.ui.View):
-    def __init__(self, user: discord.User, gender_text: str, age_text: str, form_name: str, birthday_text: str = ""):
+class GlobalApproveRejectView(discord.ui.View):
+    def __init__(self):
+        # persistent view
         super().__init__(timeout=None)
-        self.user = user
-        self.gender_text = (gender_text or "").strip()
-        self.age_text = (age_text or "").strip()
-        self.form_name = (form_name or "").strip()
-        self.birthday_text = (birthday_text or "").strip()  # ✅ NEW
 
+    # ✅ APPROVE
     @discord.ui.button(label="✅ Approve / อนุมัติ", style=discord.ButtonStyle.success, custom_id="approve_button")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
 
-            member = interaction.guild.get_member(self.user.id) or await interaction.guild.fetch_member(self.user.id)
-            general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
-            gender_role = interaction.guild.get_role(resolve_gender_role_id(self.gender_text))
+            msg = interaction.message
+            if not (msg and msg.embeds):
+                await interaction.followup.send("❌ ไม่พบข้อมูลในข้อความนี้", ephemeral=True)
+                return
+            e = msg.embeds[0]
 
-            # ✅ คิดยศอายุจากวันเกิดก่อน ถ้าไม่มี/ไม่ถูกต้อง ค่อย fallback เป็น age_text
-            age_role = None
-            resolved_years = None
-            if self.birthday_text:
-                bday_dt = parse_birthday(self.birthday_text)
-                if bday_dt:
-                    resolved_years = age_from_birthday(bday_dt)
-                    age_role_id = resolve_age_role_id(str(resolved_years))
-                    age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
-
-            if age_role is None:
-                age_role_id = resolve_age_role_id(self.age_text)
-                age_role = interaction.guild.get_role(age_role_id) if age_role_id else None
-
-            if not (member and general_role and gender_role):
-                await interaction.followup.send("❌ Member or role not found.", ephemeral=True)
-                await notify_admin(interaction.guild, "อนุมัติไม่สำเร็จ: ไม่พบ member/role")
+            # 1) หา target user จาก footer → fallback mentions
+            uid = _user_id_from_embed_footer(e)
+            if uid is None and msg.mentions:
+                uid = msg.mentions[0].id
+            if uid is None:
+                await interaction.followup.send("❌ ไม่พบผู้ใช้จากข้อความนี้", ephemeral=True)
                 return
 
-            # enforce one gender role
+            guild = interaction.guild
+            member = guild.get_member(uid) or await guild.fetch_member(uid)
+
+            # 2) เตรียม role ที่ต้องให้
+            general_role = guild.get_role(ROLE_ID_TO_GIVE)
+
+            # gender
+            gender_text = (_find_embed_field(e, "gender", "เพศ") or "").strip()
+            gender_role = guild.get_role(resolve_gender_role_id(gender_text))
+
+            # age: ให้ “วันเกิด” มี priority
+            btxt = _find_embed_field(e, "birthday", "วันเกิด")
+            resolved_years = None
+            age_role = None
+            if btxt:
+                bdt = parse_birthday(str(btxt))
+                if bdt:
+                    resolved_years = age_from_birthday(bdt)
+                    rid = resolve_age_role_id(str(resolved_years))
+                    age_role = guild.get_role(rid) if rid else None
+
+            if age_role is None:
+                atxt = _find_embed_field(e, "age", "อายุ") or "ไม่ระบุ"
+                rid = resolve_age_role_id(atxt)
+                age_role = guild.get_role(rid) if rid else None
+
+            if not (member and general_role and gender_role):
+                await interaction.followup.send("❌ Member หรือ role ไม่ครบ", ephemeral=True)
+                await notify_admin(guild, "อนุมัติไม่สำเร็จ: ไม่พบ member/role")
+                return
+
+            # 3) enforce single-role (gender / age)
             try:
                 to_remove_gender = [r for r in member.roles if r.id in GENDER_ROLE_IDS_ALL and (gender_role is None or r.id != gender_role.id)]
                 if to_remove_gender:
                     await member.remove_roles(*to_remove_gender, reason="Verification: enforce single gender role")
             except discord.Forbidden:
-                await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศเพศเดิม", ephemeral=True)
-                return
+                await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศเพศเดิม", ephemeral=True); return
 
-            # enforce one age role (only if new exists)
             if age_role:
                 try:
                     to_remove_age = [r for r in member.roles if r.id in AGE_ROLE_IDS_ALL and r.id != age_role.id]
                     if to_remove_age:
                         await member.remove_roles(*to_remove_age, reason="Verification: enforce single age role")
                 except discord.Forbidden:
-                    await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศอายุเดิม", ephemeral=True)
-                    return
+                    await interaction.followup.send("❌ ไม่มีสิทธิ์ถอดยศอายุเดิม", ephemeral=True); return
 
             roles_to_add = []
             if general_role and general_role not in member.roles: roles_to_add.append(general_role)
             if gender_role and gender_role not in member.roles: roles_to_add.append(gender_role)
             if age_role and age_role not in member.roles: roles_to_add.append(age_role)
-
             if roles_to_add:
                 try:
                     await member.add_roles(*roles_to_add, reason="Verified")
                 except discord.Forbidden:
                     await interaction.followup.send("❌ Missing permissions to add roles.", ephemeral=True)
-                    await notify_admin(interaction.guild, f"บอทให้ยศไม่สำเร็จที่ {member.mention}")
+                    await notify_admin(guild, f"บอทให้ยศไม่สำเร็จที่ {member.mention}")
                     return
 
-            # ✅ เติมวงเล็บชื่อเล่นอัตโนมัติถ้าเปิดสวิตช์และผู้ใช้กรอกชื่อเล่นมา
-            if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                me = interaction.guild.me
-                if not me.guild_permissions.manage_nicknames:
-                    await notify_admin(interaction.guild, f"บอทไม่มีสิทธิ์ Manage Nicknames จึงตั้งชื่อให้ {member.mention} ไม่ได้")
-                else:
-                    new_nick = None
-                    try:
-                        new_nick = build_parenthesized_nick(member, self.form_name)
-                        if (member.nick or "") != new_nick:
-                            await member.edit(nick=new_nick, reason="Verified: append form nickname")
-                    except discord.Forbidden:
-                        want = f"`{new_nick}`" if new_nick else "(ไม่ทราบค่า nick ใหม่)"
-                        await notify_admin(
-                            interaction.guild,
-                            f"ตั้งชื่ออัตโนมัติให้ {member.mention} ไม่สำเร็จ: ไม่มีสิทธิ์/ลำดับยศไม่พอ (ต้องการตั้งเป็น {want})"
-                        )
-                        try:
-                            await interaction.followup.send("⚠️ เติมชื่อในวงเล็บไม่สำเร็จ (สิทธิ์ไม่พอ)", ephemeral=True)
-                        except Exception:
-                            pass
-                    except discord.HTTPException as e:
-                        await notify_admin(
-                            interaction.guild,
-                            f"ตั้งชื่ออัตโนมัติให้ {member.mention} ไม่สำเร็จ (HTTP): {e!r}"
-                        )
-
-            # ✅ อัปเดต embed ให้เป็นค่าที่อนุมัติจริง (gender/age/birthday)
+            # 4) อัปเดต embed ให้สะท้อนค่าที่อนุมัติจริง
             disp_gender = gender_role.name if gender_role else "ไม่ระบุ"
-            disp_age = str(resolved_years) if resolved_years is not None else (self.age_text if not is_age_undisclosed(self.age_text) else "ไม่ระบุ")
-            await _update_approval_embed_for_member(
-                interaction.guild, member,
-                gender=disp_gender,
-                age=disp_age,
-                birthday=self.birthday_text or None
-            )
+            if resolved_years is not None:
+                disp_age = str(resolved_years)
+            else:
+                atxt = _find_embed_field(e, "age", "อายุ") or "ไม่ระบุ"
+                disp_age = atxt if not is_age_undisclosed(atxt) else "ไม่ระบุ"
 
-        except Exception as e:
-            await notify_admin(interaction.guild, f"Approve error: {e!r}")
+            await _update_approval_embed_for_member(guild, member, gender=disp_gender, age=disp_age)
+
+        except Exception as ex:
+            await notify_admin(interaction.guild, f"Approve error: {ex!r}")
         finally:
-            pending_verifications.discard(self.user.id)
-            for child in self.children:
-                if getattr(child, "custom_id", None) == "approve_button":
-                    child.label = "✅ Approved / อนุมัติแล้ว"
-                    child.style = discord.ButtonStyle.success
-                elif getattr(child, "custom_id", None) == "reject_button":
-                    child.style = discord.ButtonStyle.secondary
-                child.disabled = True
-
+            # ปิดปุ่มในข้อความนี้ + mark footer
             try:
-                msg = interaction.message
-                if msg and msg.embeds:
-                    e = msg.embeds[0]
-                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
-                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-                    orig = e.footer.text or ""
-                    footer = f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"
-                    e.set_footer(text=footer)
-                    await msg.edit(embed=e, view=self)
-                else:
-                    await interaction.message.edit(view=self)
-            except discord.NotFound:
+                actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                orig = e.footer.text or ""
+                e.set_footer(text=(f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"))
+
+                # disable เฉพาะปุ่มของข้อความนี้
+                v = GlobalApproveRejectView()
+                for child in v.children:
+                    if getattr(child, "custom_id", None) == "approve_button":
+                        child.label = "✅ Approved / อนุมัติแล้ว"
+                        child.style = discord.ButtonStyle.success
+                        child.disabled = True
+                    elif getattr(child, "custom_id", None) == "reject_button":
+                        child.style = discord.ButtonStyle.secondary
+                        child.disabled = True
+                await interaction.message.edit(embed=e, view=v)
+            except Exception:
                 pass
 
+            # ล้าง pending ถ้าค้าง
+            try:
+                if uid is not None:
+                    pending_verifications.discard(uid)
+            except Exception:
+                pass
+
+    # ❌ REJECT
     @discord.ui.button(label="❌ Reject / ปฏิเสธ", style=discord.ButtonStyle.danger, custom_id="reject_button")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
-            try:
-                await self.user.send(
-                    "❌ Your verification was rejected. Please contact admin.\n"
-                    "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
-                )
-            except Exception:
-                await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
 
-        except Exception as e:
-            await notify_admin(interaction.guild, f"Reject error: {e!r}")
+            msg = interaction.message
+            if not (msg and msg.embeds):
+                await interaction.followup.send("❌ ไม่พบข้อมูลในข้อความนี้", ephemeral=True)
+                return
+            e = msg.embeds[0]
+
+            uid = _user_id_from_embed_footer(e)
+            if uid is None and msg.mentions:
+                uid = msg.mentions[0].id
+
+            # แจ้งผู้ใช้ทาง DM (ถ้าส่งได้)
+            if uid is not None:
+                try:
+                    user = await interaction.client.fetch_user(uid)
+                    await user.send(
+                        "❌ Your verification was rejected. Please contact admin.\n"
+                        "❌ การยืนยันตัวตนของคุณไม่ผ่าน กรุณาติดต่อแอดมิน"
+                    )
+                except Exception:
+                    await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
+
+        except Exception as ex:
+            await notify_admin(interaction.guild, f"Reject error: {ex!r}")
         finally:
-            pending_verifications.discard(self.user.id)
-            for child in self.children:
-                if getattr(child, "custom_id", None) == "reject_button":
-                    child.label = "❌ Rejected / ปฏิเสธแล้ว"
-                    child.style = discord.ButtonStyle.danger
-                elif getattr(child, "custom_id", None) == "approve_button":
-                    child.style = discord.ButtonStyle.secondary
-                child.disabled = True
+            # ปิดปุ่ม + mark footer
+            try:
+                actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+                stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
+                orig = e.footer.text or ""
+                e.set_footer(text=(f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"))
+
+                v = GlobalApproveRejectView()
+                for child in v.children:
+                    if getattr(child, "custom_id", None) == "reject_button":
+                        child.label = "❌ Rejected / ปฏิเสธแล้ว"
+                        child.style = discord.ButtonStyle.danger
+                        child.disabled = True
+                    elif getattr(child, "custom_id", None) == "approve_button":
+                        child.style = discord.ButtonStyle.secondary
+                        child.disabled = True
+                await interaction.message.edit(embed=e, view=v)
+            except Exception:
+                pass
 
             try:
-                msg = interaction.message
-                if msg and msg.embeds:
-                    e = msg.embeds[0]
-                    actor = getattr(interaction.user, "display_name", None) or interaction.user.name
-                    stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
-                    orig = e.footer.text or ""
-                    footer = f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"
-                    e.set_footer(text=footer)
-                    await msg.edit(embed=e, view=self)
-                else:
-                    await interaction.message.edit(view=self)
-            except discord.NotFound:
+                if uid is not None:
+                    pending_verifications.discard(uid)
+            except Exception:
                 pass
 
 
@@ -1944,7 +1953,10 @@ async def hbd_test(ctx):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    bot.add_view(VerificationView())
+    if not getattr(bot, "_persistent_views_registered", False):
+        bot.add_view(VerificationView())          # ปุ่ม "Verify Identity"
+        bot.add_view(ApproveRejectPersistent())   # 👈 ปุ่ม "Approve/Reject" แบบ persist
+        bot._persistent_views_registered = True
     if AUTO_REFRESH_ENABLED and not getattr(bot, "_age_refresh_daemon_started", False):
         asyncio.create_task(_auto_refresh_daemon())
         bot._age_refresh_daemon_started = True

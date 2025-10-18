@@ -837,13 +837,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 await interaction.followup.send("⚠️ ระบบขัดข้อง: ไม่พบห้องอนุมัติ แจ้งแอดมินเรียบร้อย", ephemeral=True)
                 return
 
-            view = GlobalApproveRejectView(
-                user=interaction.user,
-                gender_text=gender_raw,
-                age_text=age_raw if age_raw else "ไม่ระบุ",
-                form_name=nick,
-                birthday_text=birthday_raw
-            )
+            view = GlobalApproveRejectView()
 
             await channel.send(
                 content=interaction.user.mention,

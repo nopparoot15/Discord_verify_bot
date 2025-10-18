@@ -964,7 +964,6 @@ class GlobalApproveRejectView(discord.ui.View):
 
             # เตรียม role
             general_role = guild.get_role(ROLE_ID_TO_GIVE)
-
             gender_text = (_find_embed_field(e, "gender", "เพศ") or "").strip()
             gender_role = guild.get_role(resolve_gender_role_id(gender_text))
 
@@ -1007,9 +1006,12 @@ class GlobalApproveRejectView(discord.ui.View):
                     return
 
             roles_to_add = []
-            if general_role not in member.roles: roles_to_add.append(general_role)
-            if gender_role and gender_role not in member.roles: roles_to_add.append(gender_role)
-            if age_role and age_role not in member.roles: roles_to_add.append(age_role)
+            if general_role not in member.roles:
+                roles_to_add.append(general_role)
+            if gender_role and gender_role not in member.roles:
+                roles_to_add.append(gender_role)
+            if age_role and age_role not in member.roles:
+                roles_to_add.append(age_role)
 
             if roles_to_add:
                 try:
@@ -1029,17 +1031,28 @@ class GlobalApproveRejectView(discord.ui.View):
 
             await _update_approval_embed_for_member(guild, member, gender=disp_gender, age=disp_age)
 
-            # mark footer + ปิดปุ่ม
-            actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+            # ✅ mark footer + ปิดปุ่ม (ใช้ชื่อจริงล่าสุด)
+            try:
+                approver = await guild.fetch_member(interaction.user.id)
+                actor_name = (
+                    approver.display_name
+                    or approver.nick
+                    or approver.global_name
+                    or approver.name
+                )
+            except Exception:
+                actor_name = interaction.user.display_name or interaction.user.name
+
             stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
             orig = (e.footer.text or "").strip()
-            e.set_footer(text=(f"{orig} • Approved by {actor} • {stamp}" if orig else f"Approved by {actor} • {stamp}"))
+            e.set_footer(
+                text=(f"{orig} • Approved by {actor_name} • {stamp}" if orig else f"Approved by {actor_name} • {stamp}")
+            )
             await interaction.message.edit(embed=e, view=GlobalApproveRejectView(disabled=True, approved=True))
 
         except Exception as ex:
             await notify_admin(interaction.guild, f"Approve error: {ex!r}")
         finally:
-            # ล้าง pending ถ้าค้าง
             try:
                 if uid is not None:
                     pending_verifications.discard(uid)
@@ -1076,11 +1089,23 @@ class GlobalApproveRejectView(discord.ui.View):
                 except Exception:
                     await interaction.followup.send("⚠️ ไม่สามารถส่ง DM แจ้งผู้ใช้ได้", ephemeral=True)
 
-            # mark footer + ปิดปุ่ม
-            actor = getattr(interaction.user, "display_name", None) or interaction.user.name
+            # ✅ mark footer + ปิดปุ่ม (ใช้ชื่อจริงล่าสุด)
+            try:
+                approver = await interaction.guild.fetch_member(interaction.user.id)
+                actor_name = (
+                    approver.display_name
+                    or approver.nick
+                    or approver.global_name
+                    or approver.name
+                )
+            except Exception:
+                actor_name = interaction.user.display_name or interaction.user.name
+
             stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%d/%m/%Y %H:%M")
             orig = (e.footer.text or "").strip()
-            e.set_footer(text=(f"{orig} • Rejected by {actor} • {stamp}" if orig else f"Rejected by {actor} • {stamp}"))
+            e.set_footer(
+                text=(f"{orig} • Rejected by {actor_name} • {stamp}" if orig else f"Rejected by {actor_name} • {stamp}")
+            )
             await interaction.message.edit(embed=e, view=GlobalApproveRejectView(disabled=True, rejected=True))
 
         except Exception as ex:

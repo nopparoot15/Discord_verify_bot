@@ -312,18 +312,21 @@ def resolve_age_role_id(age_text: str) -> int | None:
 # ====== Helpers ======
 async def build_avatar_attachment(user: discord.User):
     try:
+        asset = user.display_avatar
+        if asset is None:
+            return None, None
         try:
-            asset = user.display_avatar.with_format("webp").with_size(512)
-            data = await asset.read()
+            data = await asset.with_format("webp").with_size(512).read()
             filename = f"avatar_{user.id}.webp"
         except Exception:
-            asset = user.display_avatar.with_static_format("png").with_size(512)
-            data = await asset.read()
+            data = await asset.with_static_format("png").with_size(512).read()
             filename = f"avatar_{user.id}.png"
-        f = discord.File(io.BytesIO(data), filename=filename)
-        return f, filename
+
+        file = discord.File(io.BytesIO(data), filename=filename)
+        return file, filename
     except Exception:
         return None, None
+
 
 def copy_embed_fields(src: discord.Embed) -> discord.Embed:
     e = discord.Embed()
@@ -505,7 +508,7 @@ async def _run_full_age_refresh(guild: discord.Guild):
     for member, embed in candidates:
         # ✅ PRIORITY: birthday
         bday_text = _find_embed_field(embed, "birthday", "วันเกิด")
-        if bday_text:
+        if bday_text and str(bday_text).strip() not in {"", "ไม่ระบุ"}:
             bday_dt = parse_birthday(str(bday_text))
             if bday_dt:
                 years = age_from_birthday(bday_dt, now)
@@ -519,11 +522,13 @@ async def _run_full_age_refresh(guild: discord.Guild):
                         await member.add_roles(new_role, reason=f"Age refresh (birthday) → now {years}")
                     old_names = ", ".join(r.name for r in to_remove) if to_remove else "—"
                     changed_lines.append(f"✅ {member.mention}: {years} ปี (จากวันเกิด) → {new_role.name if new_role else '—'} (removed: {old_names})")
+        
+                    await _update_approval_embed_for_member(guild, member, age=str(years))
                 except discord.Forbidden:
                     error_lines.append(f"❌ {member.mention}: ปรับยศจากวันเกิดไม่สำเร็จ (สิทธิ์)")
                 except discord.HTTPException:
                     error_lines.append(f"❌ {member.mention}: ปรับยศจากวันเกิดไม่สำเร็จ (HTTP)")
-                continue  # ใช้วันเกิดแล้ว ข้ามไปคนถัดไป
+            continue
 
         age_text = _find_embed_field(embed, "age", "อายุ")
         sent_text = _find_embed_field(embed, "sent at")
@@ -701,7 +706,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             if not interaction.response.is_done():
                 await interaction.response.defer(ephemeral=True)
 
-            # 🔒 กันส่งฟอร์มซ้ำ ถ้ามียศยืนยันแล้ว
             member = interaction.guild.get_member(interaction.user.id) or await interaction.guild.fetch_member(interaction.user.id)
             if member and any(r.id == ROLE_ID_TO_GIVE for r in member.roles):
                 await interaction.followup.send(
@@ -719,7 +723,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 )
                 return
 
-            # --- Validate age ---
             age_raw = (self.age.value or "").strip()
             if not (age_raw == "" or re.fullmatch(r"\d{1,3}", age_raw) or is_age_undisclosed(age_raw)):
                 await interaction.followup.send(
@@ -730,7 +733,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 )
                 return
 
-            # --- Validate nickname (if provided) ---
             nick = (self.name.value or "").strip()
             if nick:  # ตรวจเฉพาะถ้าไม่เว้นว่าง
                 if len(nick) < 2 or len(nick) > 10 \
@@ -751,7 +753,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     )
                     return
 
-            # --- Validate gender (text only when provided) ---
             gender_raw = (self.gender.value or "")
             if gender_raw.strip():
                 if _norm_gender(gender_raw) not in GENDER_UNDISCLOSED_ALIASES:
@@ -759,7 +760,6 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                         await interaction.followup.send("❌ Gender invalid. Text only.", ephemeral=True)
                         return
 
-            # --- ✅ Validate birthday (optional) ---
             birthday_raw = (self.birthday.value or "").strip()
             bday_dt = None
             if birthday_raw:
@@ -774,21 +774,25 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
 
             pending_verifications.add(interaction.user.id)
 
-            # Prepare embed fields (เพิ่ม Birthday)
             display_nick = nick if nick else "ไม่ระบุ"
             display_age = (age_raw if age_raw else "ไม่ระบุ")
             display_gender = (gender_raw.strip() if gender_raw.strip() else "ไม่ระบุ")
             display_birthday = birthday_raw if birthday_raw else "ไม่ระบุ"
 
             embed = discord.Embed(title="📋 Verification Request / คำขอยืนยันตัวตน", color=discord.Color.orange())
-            thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
-            embed.set_thumbnail(url=thumb_url)
+
+            file, fname = await build_avatar_attachment(interaction.user)
+            if file and fname:
+                embed.set_thumbnail(url=f"attachment://{fname}")
+            else:
+                thumb_url = interaction.user.display_avatar.with_static_format("png").with_size(128).url
+                embed.set_thumbnail(url=thumb_url)
+
             embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
             embed.add_field(name="Age / อายุ", value=display_age, inline=False)
             embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
-            embed.add_field(name="Birthday / วันเกิด", value=display_birthday, inline=False)  # ✅ NEW
+            embed.add_field(name="Birthday / วันเกิด", value=display_birthday, inline=False)
 
-            # Account risk (age only)
             if ACCOUNT_RISK_ENABLED:
                 name, value, risk, age_days = build_account_check_field(interaction.user)
                 embed.add_field(name=name, value=value, inline=False)
@@ -810,14 +814,15 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 gender_text=gender_raw,
                 age_text=age_raw if age_raw else "ไม่ระบุ",
                 form_name=nick,
-                birthday_text=birthday_raw  # ✅ ส่งต่อ
+                birthday_text=birthday_raw
             )
+
             await channel.send(
                 content=interaction.user.mention,
                 embed=embed,
                 view=view,
-                # ✅ อย่า ping ผู้ใช้/roles จริง
                 allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=False),
+                file=file if file else None
             )
 
             await interaction.followup.send(
@@ -832,6 +837,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                 await interaction.followup.send("❌ ระบบขัดข้อง กรุณาลองใหม่ภายหลัง", ephemeral=True)
             except Exception:
                 pass
+
 
 class VerificationView(discord.ui.View):
     def __init__(self):
@@ -864,7 +870,7 @@ class ApproveRejectView(discord.ui.View):
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if not interaction.response.is_done():
-                await interaction.response.defer()
+                await interaction.response.defer(ephemeral=True)
 
             member = interaction.guild.get_member(self.user.id) or await interaction.guild.fetch_member(self.user.id)
             general_role = interaction.guild.get_role(ROLE_ID_TO_GIVE)
@@ -923,24 +929,34 @@ class ApproveRejectView(discord.ui.View):
 
             # ✅ เติมวงเล็บชื่อเล่นอัตโนมัติถ้าเปิดสวิตช์และผู้ใช้กรอกชื่อเล่นมา
             if APPEND_FORM_NAME_TO_NICK and self.form_name:
-                try:
-                    new_nick = build_parenthesized_nick(member, self.form_name)
-                    if (member.nick or "") != new_nick:
-                        await member.edit(nick=new_nick, reason="Verified: append form nickname")
-                except discord.Forbidden:
+                me = interaction.guild.me
+                if not me.guild_permissions.manage_nicknames:
+                    await notify_admin(interaction.guild, f"บอทไม่มีสิทธิ์ Manage Nicknames จึงตั้งชื่อให้ {member.mention} ไม่ได้")
+                else:
+                    new_nick = None
                     try:
-                        await interaction.followup.send("⚠️ เติมชื่อในวงเล็บไม่สำเร็จ (สิทธิ์ไม่พอ)", ephemeral=True)
-                    except Exception:
-                        pass
-                except discord.HTTPException:
-                    pass
+                        new_nick = build_parenthesized_nick(member, self.form_name)
+                        if (member.nick or "") != new_nick:
+                            await member.edit(nick=new_nick, reason="Verified: append form nickname")
+                    except discord.Forbidden:
+                        want = f"`{new_nick}`" if new_nick else "(ไม่ทราบค่า nick ใหม่)"
+                        await notify_admin(
+                            interaction.guild,
+                            f"ตั้งชื่ออัตโนมัติให้ {member.mention} ไม่สำเร็จ: ไม่มีสิทธิ์/ลำดับยศไม่พอ (ต้องการตั้งเป็น {want})"
+                        )
+                        try:
+                            await interaction.followup.send("⚠️ เติมชื่อในวงเล็บไม่สำเร็จ (สิทธิ์ไม่พอ)", ephemeral=True)
+                        except Exception:
+                            pass
+                    except discord.HTTPException as e:
+                        await notify_admin(
+                            interaction.guild,
+                            f"ตั้งชื่ออัตโนมัติให้ {member.mention} ไม่สำเร็จ (HTTP): {e!r}"
+                        )
 
             # ✅ อัปเดต embed ให้เป็นค่าที่อนุมัติจริง (gender/age/birthday)
             disp_gender = gender_role.name if gender_role else "ไม่ระบุ"
-            if resolved_years is not None:
-                disp_age = str(resolved_years)
-            else:
-                disp_age = self.age_text if not is_age_undisclosed(self.age_text) else "ไม่ระบุ"
+            disp_age = str(resolved_years) if resolved_years is not None else (self.age_text if not is_age_undisclosed(self.age_text) else "ไม่ระบุ")
             await _update_approval_embed_for_member(
                 interaction.guild, member,
                 gender=disp_gender,
@@ -951,7 +967,7 @@ class ApproveRejectView(discord.ui.View):
         except Exception as e:
             await notify_admin(interaction.guild, f"Approve error: {e!r}")
         finally:
-            pending_verifications.discard(self.user.id)  # ✅ กัน pending ค้างเสมอ
+            pending_verifications.discard(self.user.id)
             for child in self.children:
                 if getattr(child, "custom_id", None) == "approve_button":
                     child.label = "✅ Approved / อนุมัติแล้ว"
@@ -979,7 +995,7 @@ class ApproveRejectView(discord.ui.View):
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if not interaction.response.is_done():
-                await interaction.response.defer()
+                await interaction.response.defer(ephemeral=True)
             try:
                 await self.user.send(
                     "❌ Your verification was rejected. Please contact admin.\n"
@@ -991,7 +1007,7 @@ class ApproveRejectView(discord.ui.View):
         except Exception as e:
             await notify_admin(interaction.guild, f"Reject error: {e!r}")
         finally:
-            pending_verifications.discard(self.user.id)  # ✅ กัน pending ค้างเสมอ
+            pending_verifications.discard(self.user.id)
             for child in self.children:
                 if getattr(child, "custom_id", None) == "reject_button":
                     child.label = "❌ Rejected / ปฏิเสธแล้ว"
@@ -1085,6 +1101,7 @@ async def userinfo(ctx, *, who: str = None):
                     # ✅ ซ่อนวันเกิดบน ID Card
                     mask_birthday_field_for_idcard(new_embed)
 
+                    # ✅ ถ้ามีไฟล์รูปจากตอนอนุมัติ → ใช้ไฟล์นั้นก่อน
                     if message.attachments:
                         try:
                             att = message.attachments[0]
@@ -1095,9 +1112,18 @@ async def userinfo(ctx, *, who: str = None):
                             await ctx.send(file=file, embed=new_embed)
                             return
                         except Exception:
+                            # ถ้าอ่านไฟล์แนบล้มเหลว → จะไป fallback ข้างล่าง
                             pass
 
-                    await ctx.send(embed=new_embed)
+                    # ✅ Fallback: แนบ avatar ปัจจุบันของสมาชิกเป็นไฟล์ แล้วตั้ง thumbnail จากไฟล์
+                    file, fname = await build_avatar_attachment(member)
+                    if file and fname:
+                        new_embed.set_thumbnail(url=f"attachment://{fname}")
+                        await ctx.send(file=file, embed=new_embed)
+                    else:
+                        # ถ้าดึงไฟล์ไม่ได้จริง ๆ → ใช้ URL ปัจจุบันแทน
+                        new_embed.set_thumbnail(url=member.display_avatar.with_static_format("png").with_size(128).url)
+                        await ctx.send(embed=new_embed)
                     return
 
         except discord.Forbidden:
@@ -1115,6 +1141,7 @@ async def userinfo(ctx, *, who: str = None):
     except Exception as e:
         await notify_admin(ctx.guild, f"idcard error: {e!r}")
         await ctx.send(f"❌ คำสั่งล้มเหลว: {e!r}")
+
 
 # ---------- Single user refresh ----------
 @bot.command(name="refresh_age")
@@ -1402,7 +1429,7 @@ async def setbirthday(ctx: commands.Context, member: discord.Member, *, birthday
             return
 
         # อัปเดต embed
-        ok = await _update_approval_embed_for_member(ctx.guild, member, birthday=birthday_text)
+        ok = await _update_approval_embed_for_member(ctx.guild, member, birthday=birthday_text, age=str(years))
         if not ok:
             await ctx.send("ℹ️ ไม่พบ embed ในห้องอนุมัติสำหรับผู้ใช้นี้ จึงไม่ได้อัปเดตข้อความ (แต่ยังอัปเดตยศได้)")
 

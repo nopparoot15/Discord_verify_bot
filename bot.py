@@ -826,6 +826,16 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
                     )
                     return
 
+            # PATCH: ถ้าไม่ได้กรอกอายุ แต่กรอกวันเกิด → คำนวณให้อัตโนมัติ
+            if not age_raw and birthday_raw:
+                bdate = parse_birthday(birthday_raw)
+                if bdate:
+                    today = datetime.now(timezone(timedelta(hours=7))).date()
+                    age = today.year - bdate.year - ((today.month, today.day) < (bdate.month, bdate.day))
+                    # ป้องกันค่าผิดปกติ เช่นอายุเกิน 120 ปี
+                    if 0 <= age <= 120:
+                        age_raw = str(age)
+
             # PATCH: mark pending (จะถูกล้างตอน Approve/Reject)
             pending_verifications.add(interaction.user.id)
 

@@ -485,15 +485,22 @@ async def _build_latest_verification_index(guild: discord.Guild, limit: int = 20
     channel = guild.get_channel(APPROVAL_CHANNEL_ID)
     if not channel:
         return {}
-    index = {}
+
+    index: dict[int, tuple[discord.Embed, datetime]] = {}
     async for msg in channel.history(limit=limit):
-        if msg.author != bot.user or not msg.embeds or not msg.mentions:
+        if msg.author != bot.user or not msg.embeds:
             continue
-        u = msg.mentions[0]
-        if u is None:
+
+        e = msg.embeds[0]
+        uid = _user_id_from_embed_footer(e)
+        if uid is None and msg.mentions:
+            uid = msg.mentions[0].id
+        if uid is None:
             continue
-        if u.id not in index:
-            index[u.id] = (msg.embeds[0], msg.created_at)
+
+        if uid not in index:
+            index[uid] = (e, msg.created_at)
+
     return index
 
 async def _log_chunks(channel: discord.TextChannel, header: str, lines: list[str], chunk_size: int = 1900):
@@ -625,7 +632,7 @@ async def _find_latest_approval_message(guild: discord.Guild, member: discord.Me
     if not ch:
         return None
     async for m in ch.history(limit=1000):
-        if m.author == bot.user and m.embeds and member in m.mentions:
+        if m.author == bot.user and m.embeds and _message_belongs_to_member(m, member):
             return m
     return None
 
@@ -1809,20 +1816,28 @@ async def _latest_birthday_index(guild: discord.Guild, limit: int = 2000) -> dic
     out: dict[int, datetime] = {}
     if not ch:
         return out
+
     async for msg in ch.history(limit=limit):
-        if msg.author != bot.user or not msg.embeds or not msg.mentions:
+        if msg.author != bot.user or not msg.embeds:
             continue
-        u = msg.mentions[0]
-        if not u:
-            continue
+
         e = msg.embeds[0]
+        uid = _user_id_from_embed_footer(e)
+        if uid is None and msg.mentions:
+            uid = msg.mentions[0].id
+        if uid is None or uid in out:
+            continue
+
         btxt = _find_embed_field(e, "birthday", "วันเกิด")
-        if btxt:
-            dt = parse_birthday(str(btxt))
-            if dt:
-                if u.id not in out:
-                    out[u.id] = dt
+        if not btxt:
+            continue
+
+        dt = parse_birthday(str(btxt))
+        if dt:
+            out[uid] = dt
+
     return out
+
 
 async def _sync_age_role_from_birthday(guild: discord.Guild, member: discord.Member, bday_dt: datetime):
     years = age_from_birthday(bday_dt)

@@ -1010,12 +1010,12 @@ async def verify_embed(ctx):
         await notify_admin(ctx.guild, f"verify_embed error: {e!r}")
         await ctx.send("❌ ส่ง embed ไม่สำเร็จ")
 
-@bot.command(name="userinfo")
+@bot.command(name="idcard")
 async def userinfo(ctx, *, who: str = None):
     """
-    $userinfo                → ดู ID Card ของตัวเอง (ทุกคนใช้ได้)
-    $userinfo @someone       → ดู ID Card ของคนอื่น (แอดมินเท่านั้น)
-    $userinfo 12345678901234 → ดู ID Card ของคนอื่นจาก ID (แอดมินเท่านั้น)
+    $idcard                → ดู ID Card ของตัวเอง (ทุกคนใช้ได้)
+    $idcard @someone       → ดู ID Card ของคนอื่น (แอดมินเท่านั้น)
+    $idcard 12345678901234 → ดู ID Card ของคนอื่นจาก ID (แอดมินเท่านั้น)
     """
     try:
         # ---------- หา member ----------
@@ -1465,7 +1465,7 @@ except Exception:
 _SHORT_DESC = {
     "help": "แสดงรายการคำสั่งทั้งหมด หรือรายละเอียดของคำสั่งที่ระบุ",
     "verify_embed": "ส่ง Embed ปุ่มยืนยันตัวตนไปยังห้อง VERIFY_CHANNEL_ID",
-    "userinfo": "ดู ID Card ของตัวเอง; ดูของคนอื่นได้เฉพาะแอดมิน",
+    "idcard": "ดู ID Card ของตัวเอง; ดูของคนอื่นได้เฉพาะแอดมิน",
     "refresh_age": "อัปเดตยศอายุตามเวลาที่ผ่านไป (รายบุคคล)",
     "refresh_age_all": "อัปเดตยศอายุทั้งเซิร์ฟเวอร์ตาม logs",
     "setnick": "ตั้ง/ลบวงเล็บชื่อเล่นต่อท้าย (ระบบไม่ใส่อัตโนมัติแล้ว; ใช้เมื่อแอดมินอยากแก้เองเท่านั้น)",

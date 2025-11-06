@@ -1711,7 +1711,7 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
             is_admin = "✅ ผู้ใช้ทั่วไป" if name not in _ADMIN_COMMANDS else "🛡️ ผู้ดูแล (ต้องมีสิทธิ์ที่เกี่ยวข้อง)"
 
             embed = discord.Embed(
-                title=f"ℹ️ วิธีใช้คำสั่ง: {}{name}",
+                title=f"ℹ️ วิธีใช้คำสั่ง: {prefix}{name}",
                 description=desc_short,
                 color=discord.Color.blurple()
             )

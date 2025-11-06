@@ -728,21 +728,21 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         min_length=2, max_length=16,
         required=True
     )
-    birthday = discord.ui.TextInput(
-        label="Birthday / วันเกิด dd/mm/yyyy (เว้นได้)",
-        placeholder="เช่น 12/09/2003",
+    gender = discord.ui.TextInput(
+        label="Gender / เพศ (ไม่บังคับ)",
+        placeholder="เช่น ชาย / หญิง / LGBT",
         style=discord.TextStyle.short,
-        max_length=10, required=False
+        required=False
     )
     age = discord.ui.TextInput(
         label="Age / อายุ (เว้นได้)",
         placeholder="เช่น 21",
         style=discord.TextStyle.short,
-        max_length=16, required=False
+        required=False
     )
-    gender = discord.ui.TextInput(
-        label="Gender / เพศ (ไม่บังคับ)",
-        placeholder="เช่น ชาย / หญิง / LGBT",
+    birthday = discord.ui.TextInput(
+        label="Birthday / วันเกิด dd/mm/yyyy (เว้นได้)",
+        placeholder="เช่น 12/09/2003",
         style=discord.TextStyle.short,
         required=False
     )

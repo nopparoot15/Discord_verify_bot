@@ -742,7 +742,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
     )
     # ✅ NEW: Birthday (optional)
     birthday = discord.ui.TextInput(
-        label="Birthday / วันเกิด (ไม่บังคับ, dd/mm/yyyy)",
+        label="[ ไม่บังคับ ] Birthday / วันเกิด (dd/mm/yyyy)",
         placeholder="เช่น 12/09/2003",
         style=discord.TextStyle.short,
         min_length=0, max_length=10, required=False

@@ -722,31 +722,31 @@ def build_account_check_field(user: discord.User) -> tuple[str, str, str, int | 
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
-        label="Nickname / ชื่อเล่น (ปล่อยว่าง = ไม่ระบุ)",
-        placeholder="ตัวอักษร 2–10",
+        label="Nickname / ชื่อเล่น",
+        placeholder="ตัวอักษร 2–16",
         style=discord.TextStyle.short,
-        min_length=0, max_length=10,
-        required=False
+        min_length=2, max_length=16,
+        required=True
     )
-    age = discord.ui.TextInput(
-        label="Age / อายุ (ปล่อยว่าง = ไม่ระบุ)",
-        placeholder='เช่น 21',
-        style=discord.TextStyle.short,
-        min_length=0, max_length=16, required=False
-    )
-    gender = discord.ui.TextInput(
-        label="Gender / เพศ (ปล่อยว่าง = ไม่ระบุ)",
-        placeholder='เช่น ชาย / หญิง / LGBT',
-        style=discord.TextStyle.short,
-        min_length=0, required=False
-    )
-    # ✅ NEW: Birthday (optional)
     birthday = discord.ui.TextInput(
-        label="[ ไม่บังคับ ] Birthday / วันเกิด (dd/mm/yyyy)",
+        label="Birthday / วันเกิด dd/mm/yyyy (เว้นได้)",
         placeholder="เช่น 12/09/2003",
         style=discord.TextStyle.short,
-        min_length=0, max_length=10, required=False
+        max_length=10, required=False
     )
+    age = discord.ui.TextInput(
+        label="Age / อายุ (เว้นได้)",
+        placeholder="เช่น 21",
+        style=discord.TextStyle.short,
+        max_length=16, required=False
+    )
+    gender = discord.ui.TextInput(
+        label="Gender / เพศ (ไม่บังคับ)",
+        placeholder="เช่น ชาย / หญิง / LGBT",
+        style=discord.TextStyle.short,
+        required=False
+    )
+
 
     async def on_submit(self, interaction: discord.Interaction):
         try:

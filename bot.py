@@ -790,13 +790,13 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             nick = (self.name.value or "").strip()
             if nick:  # ตรวจเมื่อไม่ว่างเท่านั้น
                 if (
-                    len(nick) < 2 or len(nick) > 10
+                    len(nick) < 2 or len(nick) > 16
                     or any(ch.isdigit() for ch in nick)
                     or any(c in INVALID_CHARS for c in nick)
                     or contains_emoji(nick)
                 ):
                     await interaction.followup.send(
-                        "❌ Nickname invalid (ต้องเป็นตัวอักษร 2–10 ตัว และห้ามตัวเลข/สัญลักษณ์/อีโมจิ)\n"
+                        "❌ Nickname invalid (ต้องเป็นตัวอักษร 2–16 ตัว และห้ามตัวเลข/สัญลักษณ์/อีโมจิ)\n"
                         "If you don't want a nickname, you can leave it blank.",
                         ephemeral=True
                     )

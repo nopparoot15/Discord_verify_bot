@@ -855,8 +855,8 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
             embed.set_thumbnail(url=thumb_url)
 
             embed.add_field(name="Nickname / ชื่อเล่น", value=display_nick, inline=False)
-            embed.add_field(name="Age / อายุ", value=display_age, inline=False)
             embed.add_field(name="Gender / เพศ", value=display_gender, inline=False)
+            embed.add_field(name="Age / อายุ", value=display_age, inline=False)
             embed.add_field(name="Birthday / วันเกิด", value=display_birthday, inline=False)
 
             if ACCOUNT_RISK_ENABLED:
@@ -1703,7 +1703,7 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
             name = cmd.name
             desc_short = _SHORT_DESC.get(name, cmd.help or "-")
             detail = _HELP_DETAILS.get(name, {})
-            usage = detail.get("usage", f"{prefix}{name} …")
+            usage = detail.get("usage", f"{}{name} …")
             example = detail.get("example", "-")
             note = detail.get("note", None)
 
@@ -1711,7 +1711,7 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
             is_admin = "✅ ผู้ใช้ทั่วไป" if name not in _ADMIN_COMMANDS else "🛡️ ผู้ดูแล (ต้องมีสิทธิ์ที่เกี่ยวข้อง)"
 
             embed = discord.Embed(
-                title=f"ℹ️ วิธีใช้คำสั่ง: {prefix}{name}",
+                title=f"ℹ️ วิธีใช้คำสั่ง: {}{name}",
                 description=desc_short,
                 color=discord.Color.blurple()
             )
@@ -1731,11 +1731,11 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
 
         embed = discord.Embed(
             title="📜 รายการคำสั่งทั้งหมด",
-            description=f"พิมพ์ `{prefix}help <คำสั่ง>` เพื่อดูวิธีใช้แบบละเอียด",
+            description=f"พิมพ์ `{}help <คำสั่ง>` เพื่อดูวิธีใช้แบบละเอียด",
             color=discord.Color.green()
         )
-        embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(prefix, general), inline=False)
-        embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(prefix, admin), inline=False)
+        embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(, general), inline=False)
+        embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(, admin), inline=False)
 
         await ctx.send(embed=embed)
     except Exception as e:

@@ -1703,7 +1703,7 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
             name = cmd.name
             desc_short = _SHORT_DESC.get(name, cmd.help or "-")
             detail = _HELP_DETAILS.get(name, {})
-            usage = detail.get("usage", f"{}{name} …")
+            usage = detail.get("usage", f"{prefix}{name} …")
             example = detail.get("example", "-")
             note = detail.get("note", None)
 

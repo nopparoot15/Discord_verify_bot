@@ -1734,7 +1734,7 @@ async def help_command(ctx: commands.Context, *, command_name: str = None):
             description=f"พิมพ์ `{prefix}help <คำสั่ง>` เพื่อดูวิธีใช้แบบละเอียด",
             color=discord.Color.green()
         )
-        embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(, general), inline=False)
+        embed.add_field(name="ทั่วไป", value=_fmt_cmd_list(prefix, general), inline=False)
         embed.add_field(name="สำหรับผู้ดูแล", value=_fmt_cmd_list(, admin), inline=False)
 
         await ctx.send(embed=embed)

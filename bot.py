@@ -722,7 +722,7 @@ def build_account_check_field(user: discord.User) -> tuple[str, str, str, int | 
 # =========== Modal / Views / Commands ===========
 class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนยันตัวตน"):
     name = discord.ui.TextInput(
-        label="Nickname / ชื่อเล่น",
+        label="Nickname / ชื่อเล่น (จำเป็นต้องกรอก)", 
         placeholder="ตัวอักษร 2–16",
         style=discord.TextStyle.short,
         min_length=2, max_length=16,
@@ -735,17 +735,18 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         required=False
     )
     age = discord.ui.TextInput(
-        label="Age / อายุ (เว้นได้)",
+        label="Age / อายุ (ไม่บังคับ)",
         placeholder="เช่น 21",
         style=discord.TextStyle.short,
         required=False
     )
     birthday = discord.ui.TextInput(
-        label="Birthday / วันเกิด dd/mm/yyyy (เว้นได้)",
+        label="Birthday / วันเกิด dd/mm/yyyy (กรอกหากต้องการระบบ HBD)",
         placeholder="เช่น 12/09/2003",
         style=discord.TextStyle.short,
         required=False
     )
+
 
 
     async def on_submit(self, interaction: discord.Interaction):

@@ -741,7 +741,7 @@ class VerificationForm(discord.ui.Modal, title="Verify Identity / ยืนย�
         required=False
     )
     birthday = discord.ui.TextInput(
-        label="Birthday / วันเกิด dd/mm/yyyy (กรอกหากต้องการระบบ HBD)",
+        label="Birthday / วันเกิด dd/mm/yyyy (ใช้สำหรับ HBD)",
         placeholder="เช่น 12/09/2003",
         style=discord.TextStyle.short,
         required=False
